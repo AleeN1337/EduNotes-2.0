@@ -239,32 +239,16 @@ export default function UserManagementMenu({
   };
 
   const sortedMembers = [...members].sort((a, b) => {
-    // Sortuj wyłącznie po liczbie polubień (malejąco). Rola nie wpływa na pozycję.
+    // Właściciele na górze
+    if (a.role === "owner" && b.role !== "owner") return -1;
+    if (b.role === "owner" && a.role !== "owner") return 1;
+    // Potem po liczbie like'ów (malejąco)
     const aLikes = userLikes[a.user_id] ?? 0;
     const bLikes = userLikes[b.user_id] ?? 0;
     if (bLikes !== aLikes) return bLikes - aLikes;
-    // W ostateczności alfabetycznie po nazwie
+    // W ostateczności alfabetycznie
     return getSortName(a).localeCompare(getSortName(b));
   });
-
-  // Debug: log likes and final order when menu opens or likes change
-  React.useEffect(() => {
-    if (!open) return;
-    try {
-      console.debug("UserManagementMenu - userLikes:", userLikes);
-      console.debug(
-        "UserManagementMenu - sortedMembers:",
-        sortedMembers.map((m) => ({
-          user_id: m.user_id,
-          role: m.role,
-          likes: userLikes[m.user_id] ?? 0,
-          name: getSortName(m),
-        }))
-      );
-    } catch (e) {
-      // ignore
-    }
-  }, [open, userLikes, members]);
 
   // Fetch likes for members when menu opens (best-effort)
   React.useEffect(() => {

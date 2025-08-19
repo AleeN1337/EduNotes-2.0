@@ -226,9 +226,67 @@ export default function ChatArea(props: ChatAreaProps) {
     try {
       const s = String(val);
       if (/^https?:\/\//i.test(s)) return s;
-      // If already absolute path starting with /api/backend, return as-is
-      if (s.startsWith("/api/backend")) return s;
-      // Otherwise map to backend proxy endpoint
+
+      // Per requirement: map any path that references note_imgs to the
+      // media server URL: http://localhost:8000/media/note_imgs/<filename>
+      // Extract filename (last path segment) and build URL.
+      const mapToLocalMedia = (p: string) => {
+        // Find the segment 'note_imgs' and preserve everything after it (e.g. /note_imgs/<orgId>/<file>)
+        const idx = p.indexOf("note_imgs");
+        let suffix = "";
+        if (idx !== -1) {
+          suffix = p.slice(idx + "note_imgs".length);
+        } else {
+          // fallback: use full path basename
+          const parts = p.split("/").filter(Boolean);
+          suffix = parts.length ? `/${parts[parts.length - 1]}` : `/${p}`;
+        }
+        // Ensure leading slash
+        if (!suffix.startsWith("/")) suffix = `/${suffix}`;
+        return `http://localhost:8000/media/note_imgs${encodeURIComponent(
+          suffix
+        )}`.replace(/%2F/g, "/");
+      };
+
+      // If the backend returns an /api/backend path that contains note_imgs,
+      // rewrite it to the requested media server path
+      if (s.startsWith("/api/backend")) {
+        const tail = s.replace(/^\/api\/backend/, "");
+        if (tail.includes("note_imgs")) {
+          return mapToLocalMedia(tail);
+        }
+        // Map avatar media paths to media server as well
+        if (tail.includes("avatars") || tail.includes("avatar")) {
+          // preserve everything after 'avatars' segment
+          const idxA = tail.indexOf("avatars");
+          const suffixA =
+            idxA !== -1 ? tail.slice(idxA + "avatars".length) : tail;
+          let sfx = suffixA;
+          if (!sfx.startsWith("/")) sfx = `/${sfx}`;
+          return `http://localhost:8000/media/avatars${encodeURIComponent(
+            sfx
+          )}`.replace(/%2F/g, "/");
+        }
+        return s;
+      }
+
+      // If the value already references note_imgs (e.g. "note_imgs/.." or "/note_imgs/.."),
+      // map it to the media server
+      if (s.includes("note_imgs")) {
+        return mapToLocalMedia(s);
+      }
+      // Map avatar paths to media server when backend stores them under media/avatars
+      if (s.includes("avatars") || s.includes("avatar")) {
+        // Find 'avatars' occurrence and preserve suffix
+        const idx = s.indexOf("avatars");
+        let suffix = idx !== -1 ? s.slice(idx + "avatars".length) : s;
+        if (!suffix.startsWith("/")) suffix = `/${suffix}`;
+        return `http://localhost:8000/media/avatars${encodeURIComponent(
+          suffix
+        )}`.replace(/%2F/g, "/");
+      }
+
+      // Otherwise map to backend proxy endpoint as before
       return `/api/backend${s.startsWith("/") ? "" : "/"}${s}`;
     } catch {
       return undefined;
@@ -238,6 +296,12 @@ export default function ChatArea(props: ChatAreaProps) {
   // Plus menu state
   const [menuAnchor, setMenuAnchor] = React.useState<null | HTMLElement>(null);
   const [menuMsg, setMenuMsg] = React.useState<Message | null>(null);
+  // Track pending like/dislike requests per message to avoid double submits
+  const [pendingRatings, setPendingRatings] = React.useState<Record<string, boolean>>({});
+  // Confirmed ratings reflect server-acknowledged likes/dislikes
+  const [confirmedRatings, setConfirmedRatings] = React.useState<
+    Record<string, { liked?: boolean; disliked?: boolean }>
+  >({});
   const closeMenu = () => {
     setMenuAnchor(null);
     setMenuMsg(null);
@@ -267,9 +331,36 @@ export default function ChatArea(props: ChatAreaProps) {
     );
     candidates.forEach(async (m) => {
       try {
-        const resp = await fetch(m.image_url as string, {
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
+        // Use resolved asset URL (may map note_imgs -> media server) so we fetch the correct location
+        const toFetch =
+          resolveAssetUrl(m.image_url as string) || (m.image_url as string);
+
+        // Avoid fetching cross-origin static media (e.g. http://localhost:8000) because
+        // fetch() will trigger CORS preflight when custom headers are present. Static
+        // media should be loaded directly by the <img> element (no JS fetch) which
+        // does not require CORS to display the image. Only prefetch when the resource
+        // is same-origin or served via the backend proxy and may require Authorization.
+        try {
+          const isHttp = /^https?:\/\//i.test(toFetch);
+          const origin =
+            typeof window !== "undefined" ? window.location.origin : "";
+          const isSameOrigin = isHttp ? toFetch.startsWith(origin) : !isHttp;
+          const looksLikeBackendProxy =
+            String(toFetch).includes("/api/backend");
+
+          if (!isSameOrigin && !looksLikeBackendProxy) {
+            // skip prefetch for cross-origin static media (let <img> load it)
+            return;
+          }
+        } catch {
+          // if anything goes wrong deciding origin, fall back to letting <img> handle it
+          return;
+        }
+
+        const headers = token
+          ? { Authorization: `Bearer ${token}` }
+          : undefined;
+        const resp = await fetch(toFetch, { headers });
         if (!resp.ok) throw new Error("image fetch failed");
         const blob = await resp.blob();
         const url = URL.createObjectURL(blob);
@@ -939,23 +1030,67 @@ export default function ChatArea(props: ChatAreaProps) {
         transformOrigin={{ vertical: "top", horizontal: "center" }}
       >
         <MenuItem
-          onClick={() => {
+          onClick={async () => {
             if (!menuMsg) return;
-            const liked = !!messageRatings[menuMsg.id]?.liked;
+            const id = String(menuMsg.id);
+            if (pendingRatings[id]) return; // guard double-click
+
+            const alreadyConfirmed = !!confirmedRatings[id]?.liked;
+            const likedLocal = !!messageRatings[id]?.liked;
+
+            // If server already confirmed a like, don't attempt to unlike (backend has no remove endpoint)
+            if (alreadyConfirmed && likedLocal) {
+              // ensure UI matches server
+              setMessageRatings((prev) => ({ ...prev, [id]: { liked: true, disliked: false } }));
+              try {
+                localStorage.setItem(ratingsKey, JSON.stringify({ ...messageRatings, [id]: { liked: true, disliked: false } }));
+              } catch {}
+              closeMenu();
+              return;
+            }
+
             const next = {
               ...messageRatings,
-              [menuMsg.id]: { liked: !liked, disliked: false },
+              [id]: { liked: true, disliked: false },
             } as Record<string, { liked: boolean; disliked: boolean }>;
+            // optimistic update (set liked=true)
             setMessageRatings(next);
             try {
               localStorage.setItem(ratingsKey, JSON.stringify(next));
             } catch {}
-            if (!liked) {
-              api
-                .post(`/notes/give_like`, null, {
-                  params: { note_id: menuMsg.id },
-                })
-                .catch(() => {});
+
+            setPendingRatings((p) => ({ ...p, [id]: true }));
+            try {
+              await api.post(`/notes/give_like`, null, { params: { note_id: id } });
+              // on success mark confirmed; parent polling will refresh authoritative counts
+              setConfirmedRatings((c) => ({ ...c, [id]: { liked: true } }));
+            } catch (err: any) {
+              // If server reports already liked, mark confirmed and keep UI consistent
+              const detail = err?.response?.data?.detail || String(err?.message || "");
+              if (typeof detail === "string" && detail.toLowerCase().includes("already")) {
+                setConfirmedRatings((c) => ({ ...c, [id]: { liked: true } }));
+                // ensure local state reflects confirmed like
+                setMessageRatings((prev) => ({ ...prev, [id]: { liked: true, disliked: false } }));
+                try {
+                  localStorage.setItem(ratingsKey, JSON.stringify({ ...messageRatings, [id]: { liked: true, disliked: false } }));
+                } catch {}
+              } else {
+                // revert optimistic change on other failures
+                setMessageRatings((prev) => {
+                  const reverted = { ...prev };
+                  reverted[id] = { liked: false, disliked: false };
+                  try {
+                    localStorage.setItem(ratingsKey, JSON.stringify(reverted));
+                  } catch {}
+                  return reverted;
+                });
+              }
+            } finally {
+              setPendingRatings((p) => {
+                const copy = { ...p };
+                delete copy[id];
+                return copy;
+              });
             }
             closeMenu();
           }}
@@ -973,23 +1108,60 @@ export default function ChatArea(props: ChatAreaProps) {
           Polub
         </MenuItem>
         <MenuItem
-          onClick={() => {
+          onClick={async () => {
             if (!menuMsg) return;
-            const disliked = !!messageRatings[menuMsg.id]?.disliked;
+            const id = String(menuMsg.id);
+            if (pendingRatings[id]) return; // guard double-click
+
+            const alreadyConfirmed = !!confirmedRatings[id]?.disliked;
+            const dislikedLocal = !!messageRatings[id]?.disliked;
+
+            if (alreadyConfirmed && dislikedLocal) {
+              setMessageRatings((prev) => ({ ...prev, [id]: { liked: false, disliked: true } }));
+              try {
+                localStorage.setItem(ratingsKey, JSON.stringify({ ...messageRatings, [id]: { liked: false, disliked: true } }));
+              } catch {}
+              closeMenu();
+              return;
+            }
+
             const next = {
               ...messageRatings,
-              [menuMsg.id]: { liked: false, disliked: !disliked },
+              [id]: { liked: false, disliked: true },
             } as Record<string, { liked: boolean; disliked: boolean }>;
             setMessageRatings(next);
             try {
               localStorage.setItem(ratingsKey, JSON.stringify(next));
             } catch {}
-            if (!disliked) {
-              api
-                .post(`/notes/give_dislike`, null, {
-                  params: { note_id: menuMsg.id },
-                })
-                .catch(() => {});
+
+            setPendingRatings((p) => ({ ...p, [id]: true }));
+            try {
+              await api.post(`/notes/give_dislike`, null, { params: { note_id: id } });
+              setConfirmedRatings((c) => ({ ...c, [id]: { disliked: true } }));
+            } catch (err: any) {
+              const detail = err?.response?.data?.detail || String(err?.message || "");
+              if (typeof detail === "string" && detail.toLowerCase().includes("already")) {
+                setConfirmedRatings((c) => ({ ...c, [id]: { disliked: true } }));
+                setMessageRatings((prev) => ({ ...prev, [id]: { liked: false, disliked: true } }));
+                try {
+                  localStorage.setItem(ratingsKey, JSON.stringify({ ...messageRatings, [id]: { liked: false, disliked: true } }));
+                } catch {}
+              } else {
+                setMessageRatings((prev) => {
+                  const reverted = { ...prev };
+                  reverted[id] = { liked: false, disliked: false };
+                  try {
+                    localStorage.setItem(ratingsKey, JSON.stringify(reverted));
+                  } catch {}
+                  return reverted;
+                });
+              }
+            } finally {
+              setPendingRatings((p) => {
+                const copy = { ...p };
+                delete copy[id];
+                return copy;
+              });
             }
             closeMenu();
           }}

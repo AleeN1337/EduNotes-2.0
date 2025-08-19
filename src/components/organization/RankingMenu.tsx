@@ -106,9 +106,11 @@ export default function RankingMenu({ members, orgId }: RankingMenuProps) {
     likes: userLikes[m.user_id] ?? 0,
   }));
 
+  // Primary sort by likes (descending). If likes equal, prefer owner, then alphabetical.
   ranked.sort((a, b) => {
-  // Sortuj wyłącznie po polubieniach (malejąco). Rola nie wpływa na pozycję.
-  if (b.likes !== a.likes) return b.likes - a.likes;
+    if (b.likes !== a.likes) return b.likes - a.likes;
+    if (a.role === "owner" && b.role !== "owner") return -1;
+    if (b.role === "owner" && a.role !== "owner") return 1;
     const an = (a.username || a.email || "").toLowerCase();
     const bn = (b.username || b.email || "").toLowerCase();
     return an.localeCompare(bn);

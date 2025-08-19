@@ -593,18 +593,25 @@ export default function OrganizationPage() {
     formData.append("file", selectedFile);
 
     try {
-      const response = await api.post("/upload", formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-        },
+      // POST directly to the Next.js app route /api/uploads so we don't go through
+      // the external `api` baseURL (which may point to /api/backend).
+      const uploadUrl = `/api/uploads?orgId=${encodeURIComponent(
+        String(orgId)
+      )}`;
+      const resp = await fetch(uploadUrl, {
+        method: "POST",
+        body: formData,
       });
-
-      // Handle successful upload
-      console.log("File uploaded successfully:", response.data);
+      if (!resp.ok) {
+        const txt = await resp.text().catch(() => "");
+        throw new Error(`Upload failed: ${resp.status} ${txt}`);
+      }
+      const data = await resp.json();
+      console.log("File uploaded successfully:", data);
       setSelectedFile(null);
 
-      // You can add the file URL to the message here
-      return response.data.file_url;
+      // The app route returns { url: publicPath, filename, contentType }
+      return data.url || data.file_url || null;
     } catch (error) {
       console.error("Error uploading file:", error);
       return null;
