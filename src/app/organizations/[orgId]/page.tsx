@@ -1077,7 +1077,7 @@ export default function OrganizationPage() {
       if (topicsInChannel.length > 0) {
         for (const topic of topicsInChannel) {
           try {
-            await api.delete(`/topics/${topic.id}`);
+            await deleteTopicCascade(topic.id);
           } catch (topicError) {
             console.error(`Error deleting topic ${topic.id}:`, topicError);
             // Continue with other topics even if one fails
@@ -1119,6 +1119,72 @@ export default function OrganizationPage() {
     }
   };
 
+  // Safely delete a topic by first deleting all notes in that topic.
+  // This avoids backend 500s due to foreign key constraints (likes/images linked to notes).
+  const deleteTopicCascade = async (topicId: string) => {
+    // 1) Fetch notes in topic
+    let notes: any[] = [];
+    try {
+      const res = await api.get(`/notes/notes_in_topic`, {
+        params: { topic_id: Number(topicId) },
+        validateStatus: () => true,
+      });
+      if (res.status === 200) {
+        const raw = Array.isArray(res.data) ? res.data : unwrap<any[]>(res);
+        notes = Array.isArray(raw) ? raw : [];
+      } else if (res.status !== 404) {
+        console.warn(`notes_in_topic returned ${res.status} for topic ${topicId}`);
+      }
+    } catch (e) {
+      console.warn(`Error fetching notes for topic ${topicId}`, e);
+    }
+
+    // 2) Delete each note (attempt to remove local uploads first, then delete note)
+    for (const n of notes) {
+      const noteId = String(normalizeId(n, ["note_id", "id"])) || "";
+      if (!noteId) continue;
+      // Try to remove uploaded file if it points to our public/note_imgs
+      try {
+        const img = n.image_url || n.image || n.file_url || n.file || n.attachment_url || n.attachment;
+        if (img && typeof img === "string") {
+          let s = String(img);
+          // Accept various forms and normalize to /note_imgs/... relative path
+          if (/^https?:\/\//i.test(s)) {
+            // if it contains /media/note_imgs/, map to /note_imgs/
+            const m = s.match(/\/media\/note_imgs\/(.+)$/i);
+            if (m) {
+              s = `/note_imgs/${m[1]}`;
+            } else {
+              s = ""; // external file not managed locally
+            }
+          } else if (s.startsWith("/api/backend")) {
+            const idx = s.indexOf("note_imgs");
+            s = idx !== -1 ? `/${s.slice(idx)}` : "";
+          } else if (!s.includes("note_imgs")) {
+            s = "";
+          } else if (!s.startsWith("/")) {
+            s = `/${s}`;
+          }
+          if (s && s.startsWith("/note_imgs/")) {
+            // Call our uploads DELETE endpoint
+            await fetch(`/api/uploads?path=${encodeURIComponent(s)}`, { method: "DELETE" });
+          }
+        }
+      } catch (delFileErr) {
+        console.warn("Could not remove local upload for note", noteId, delFileErr);
+      }
+      // Now delete note in backend
+      try {
+        await api.delete(`/notes/${noteId}`, { validateStatus: () => true });
+      } catch (e) {
+        console.warn(`Error deleting note ${noteId} in topic ${topicId}`, e);
+      }
+    }
+
+    // 3) Delete topic itself
+    await api.delete(`/topics/${topicId}`);
+  };
+
   // Function to delete a topic
   const handleDeleteTopic = async (topicId: string) => {
     setConfirmCfg({
@@ -1126,12 +1192,13 @@ export default function OrganizationPage() {
       message: "Czy na pewno chcesz usunąć temat?",
       onConfirm: async () => {
         try {
-          await api.delete(`/topics/${topicId}`);
-          // Determine which channel contained this topic
+          // Find affected channel first (for UI updates)
           const entry = Object.entries(channelTopics).find(([, topics]) =>
             topics.some((t) => t.id === topicId)
           );
           const affectedChannelId = entry?.[0];
+          // Perform cascade delete: remove notes, then topic
+          await deleteTopicCascade(topicId);
           if (affectedChannelId) {
             // Reload only that channel's topics
             await loadTopicsForChannel(affectedChannelId);

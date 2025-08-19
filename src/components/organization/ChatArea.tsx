@@ -69,6 +69,7 @@ export interface ChatAreaProps {
   ratingsKey: string; // kept, not used
   // Currently selected topic id (required for backend AI summary endpoint)
   topicId: string | null;
+  onRefresh?: () => Promise<void> | void;
 }
 
 export default function ChatArea(props: ChatAreaProps) {
@@ -298,6 +299,8 @@ export default function ChatArea(props: ChatAreaProps) {
   const [menuMsg, setMenuMsg] = React.useState<Message | null>(null);
   // Track pending like/dislike requests per message to avoid double submits
   const [pendingRatings, setPendingRatings] = React.useState<Record<string, boolean>>({});
+  // ref mirror for immediate synchronous checks inside handlers
+  const pendingRef = React.useRef<Record<string, boolean>>({});
   // Confirmed ratings reflect server-acknowledged likes/dislikes
   const [confirmedRatings, setConfirmedRatings] = React.useState<
     Record<string, { liked?: boolean; disliked?: boolean }>
@@ -1030,50 +1033,61 @@ export default function ChatArea(props: ChatAreaProps) {
         transformOrigin={{ vertical: "top", horizontal: "center" }}
       >
         <MenuItem
-          onClick={async () => {
+            onClick={async () => {
             if (!menuMsg) return;
             const id = String(menuMsg.id);
-            if (pendingRatings[id]) return; // guard double-click
+            if (pendingRef.current[id]) return; // immediate guard
 
             const alreadyConfirmed = !!confirmedRatings[id]?.liked;
             const likedLocal = !!messageRatings[id]?.liked;
 
             // If server already confirmed a like, don't attempt to unlike (backend has no remove endpoint)
             if (alreadyConfirmed && likedLocal) {
-              // ensure UI matches server
-              setMessageRatings((prev) => ({ ...prev, [id]: { liked: true, disliked: false } }));
-              try {
-                localStorage.setItem(ratingsKey, JSON.stringify({ ...messageRatings, [id]: { liked: true, disliked: false } }));
-              } catch {}
+              // ensure UI matches server using functional update and persist
+              setMessageRatings((prev) => {
+                const next = { ...prev, [id]: { liked: true, disliked: false } };
+                try {
+                  localStorage.setItem(ratingsKey, JSON.stringify(next));
+                } catch {}
+                return next;
+              });
               closeMenu();
               return;
             }
 
-            const next = {
-              ...messageRatings,
-              [id]: { liked: true, disliked: false },
-            } as Record<string, { liked: boolean; disliked: boolean }>;
-            // optimistic update (set liked=true)
-            setMessageRatings(next);
-            try {
-              localStorage.setItem(ratingsKey, JSON.stringify(next));
-            } catch {}
-
+            // mark pending immediately
+            pendingRef.current[id] = true;
             setPendingRatings((p) => ({ ...p, [id]: true }));
+
+            // optimistic update (set liked=true) with functional update and persist
+            setMessageRatings((prev) => {
+              const next = { ...prev, [id]: { liked: true, disliked: false } };
+              try {
+                localStorage.setItem(ratingsKey, JSON.stringify(next));
+              } catch {}
+              return next;
+            });
             try {
               await api.post(`/notes/give_like`, null, { params: { note_id: id } });
               // on success mark confirmed; parent polling will refresh authoritative counts
               setConfirmedRatings((c) => ({ ...c, [id]: { liked: true } }));
+              // trigger a parent refresh if provided so the authoritative counts update immediately
+              try {
+                if (typeof props.onRefresh === "function") await props.onRefresh();
+              } catch {}
             } catch (err: any) {
               // If server reports already liked, mark confirmed and keep UI consistent
               const detail = err?.response?.data?.detail || String(err?.message || "");
               if (typeof detail === "string" && detail.toLowerCase().includes("already")) {
                 setConfirmedRatings((c) => ({ ...c, [id]: { liked: true } }));
-                // ensure local state reflects confirmed like
-                setMessageRatings((prev) => ({ ...prev, [id]: { liked: true, disliked: false } }));
-                try {
-                  localStorage.setItem(ratingsKey, JSON.stringify({ ...messageRatings, [id]: { liked: true, disliked: false } }));
-                } catch {}
+                // ensure local state reflects confirmed like and persist
+                setMessageRatings((prev) => {
+                  const next = { ...prev, [id]: { liked: true, disliked: false } };
+                  try {
+                    localStorage.setItem(ratingsKey, JSON.stringify(next));
+                  } catch {}
+                  return next;
+                });
               } else {
                 // revert optimistic change on other failures
                 setMessageRatings((prev) => {
@@ -1086,6 +1100,8 @@ export default function ChatArea(props: ChatAreaProps) {
                 });
               }
             } finally {
+              // clear pending both ref and state
+              pendingRef.current[id] = false;
               setPendingRatings((p) => {
                 const copy = { ...p };
                 delete copy[id];
@@ -1111,41 +1127,50 @@ export default function ChatArea(props: ChatAreaProps) {
           onClick={async () => {
             if (!menuMsg) return;
             const id = String(menuMsg.id);
-            if (pendingRatings[id]) return; // guard double-click
+            if (pendingRef.current[id]) return; // immediate guard
 
             const alreadyConfirmed = !!confirmedRatings[id]?.disliked;
             const dislikedLocal = !!messageRatings[id]?.disliked;
 
             if (alreadyConfirmed && dislikedLocal) {
-              setMessageRatings((prev) => ({ ...prev, [id]: { liked: false, disliked: true } }));
-              try {
-                localStorage.setItem(ratingsKey, JSON.stringify({ ...messageRatings, [id]: { liked: false, disliked: true } }));
-              } catch {}
+              setMessageRatings((prev) => {
+                const next = { ...prev, [id]: { liked: false, disliked: true } };
+                try {
+                  localStorage.setItem(ratingsKey, JSON.stringify(next));
+                } catch {}
+                return next;
+              });
               closeMenu();
               return;
             }
 
-            const next = {
-              ...messageRatings,
-              [id]: { liked: false, disliked: true },
-            } as Record<string, { liked: boolean; disliked: boolean }>;
-            setMessageRatings(next);
-            try {
-              localStorage.setItem(ratingsKey, JSON.stringify(next));
-            } catch {}
-
+            pendingRef.current[id] = true;
             setPendingRatings((p) => ({ ...p, [id]: true }));
+
+            setMessageRatings((prev) => {
+              const next = { ...prev, [id]: { liked: false, disliked: true } };
+              try {
+                localStorage.setItem(ratingsKey, JSON.stringify(next));
+              } catch {}
+              return next;
+            });
             try {
               await api.post(`/notes/give_dislike`, null, { params: { note_id: id } });
               setConfirmedRatings((c) => ({ ...c, [id]: { disliked: true } }));
+              try {
+                if (typeof props.onRefresh === "function") await props.onRefresh();
+              } catch {}
             } catch (err: any) {
               const detail = err?.response?.data?.detail || String(err?.message || "");
               if (typeof detail === "string" && detail.toLowerCase().includes("already")) {
                 setConfirmedRatings((c) => ({ ...c, [id]: { disliked: true } }));
-                setMessageRatings((prev) => ({ ...prev, [id]: { liked: false, disliked: true } }));
-                try {
-                  localStorage.setItem(ratingsKey, JSON.stringify({ ...messageRatings, [id]: { liked: false, disliked: true } }));
-                } catch {}
+                setMessageRatings((prev) => {
+                  const next = { ...prev, [id]: { liked: false, disliked: true } };
+                  try {
+                    localStorage.setItem(ratingsKey, JSON.stringify(next));
+                  } catch {}
+                  return next;
+                });
               } else {
                 setMessageRatings((prev) => {
                   const reverted = { ...prev };
@@ -1157,6 +1182,7 @@ export default function ChatArea(props: ChatAreaProps) {
                 });
               }
             } finally {
+              pendingRef.current[id] = false;
               setPendingRatings((p) => {
                 const copy = { ...p };
                 delete copy[id];

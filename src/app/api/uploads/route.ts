@@ -48,3 +48,66 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Upload failed" }, { status: 500 });
   }
 }
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const url = new URL(request.url);
+    // Prefer an explicit relative path under /note_imgs
+    let relPath = url.searchParams.get("path");
+    const orgId = url.searchParams.get("orgId");
+    const name = url.searchParams.get("name");
+
+    if (!relPath) {
+      if (!orgId || !name) {
+        return NextResponse.json(
+          { error: "Missing path or (orgId,name)" },
+          { status: 400 }
+        );
+      }
+      relPath = `/note_imgs/${encodeURIComponent(orgId)}/${encodeURIComponent(
+        name
+      )}`;
+    }
+
+    // Normalize: ensure it starts with /note_imgs/
+    if (relPath.startsWith("/api/backend")) {
+      relPath = relPath.replace(/^\/api\/backend/, "");
+    }
+    if (!relPath.startsWith("/note_imgs/")) {
+      // also accept bare note_imgs/... without leading slash
+      if (relPath.startsWith("note_imgs/")) {
+        relPath = `/${relPath}`;
+      } else {
+        return NextResponse.json({ error: "Invalid path" }, { status: 400 });
+      }
+    }
+
+    // Prevent path traversal
+    const unsafe = relPath.includes("..") || relPath.includes("\\..")
+      || relPath.includes("%2e%2e") || relPath.includes("%2E%2E");
+    if (unsafe) {
+      return NextResponse.json({ error: "Unsafe path" }, { status: 400 });
+    }
+
+    const publicDir = path.join(process.cwd(), "public");
+    const absPath = path.join(publicDir, relPath);
+
+    // Ensure target is within public/note_imgs
+    const noteImgsDir = path.join(publicDir, "note_imgs");
+    const resolved = path.resolve(absPath);
+    if (!resolved.startsWith(path.resolve(noteImgsDir))) {
+      return NextResponse.json({ error: "Path outside note_imgs" }, { status: 400 });
+    }
+
+    try {
+      await fs.promises.unlink(absPath);
+    } catch (e: any) {
+      // If file not found, treat as success (idempotent delete)
+      if (e?.code !== "ENOENT") throw e;
+    }
+    return NextResponse.json({ success: true }, { status: 200 });
+  } catch (err) {
+    console.error("/api/uploads DELETE error:", err);
+    return NextResponse.json({ error: "Delete failed" }, { status: 500 });
+  }
+}
