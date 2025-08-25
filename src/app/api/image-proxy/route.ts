@@ -23,9 +23,8 @@ export async function GET(request: NextRequest) {
 
     const contentType =
       response.headers.get("content-type") || "application/octet-stream";
-    const buffer = await response.arrayBuffer();
-
-    return new Response(buffer, {
+    // Stream back directly to avoid buffering large images in memory
+    return new Response(response.body, {
       status: 200,
       headers: {
         "Content-Type": contentType,

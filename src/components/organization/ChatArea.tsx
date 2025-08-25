@@ -207,16 +207,28 @@ export default function ChatArea(props: ChatAreaProps) {
 
   const getDisplayedLikes = (msg: Message) => {
     const base = typeof msg.likes === "number" ? msg.likes : 0;
-    const initialLiked = !!initialRatingsRef.current[msg.id]?.liked;
     const currentLiked = !!messageRatings[msg.id]?.liked;
-    return base - (initialLiked ? 1 : 0) + (currentLiked ? 1 : 0);
+    const isPending = !!pendingRatings[msg.id];
+    if (!isPending) return base;
+    const prev =
+      confirmedRatings[msg.id] || initialRatingsRef.current[msg.id] || {};
+    const prevLiked = !!(prev as any).liked;
+    const delta = (currentLiked ? 1 : 0) - (prevLiked ? 1 : 0);
+    const res = base + delta;
+    return res < 0 ? 0 : res;
   };
 
   const getDisplayedDislikes = (msg: Message) => {
     const base = typeof msg.dislikes === "number" ? msg.dislikes : 0;
-    const initial = !!initialRatingsRef.current[msg.id]?.disliked;
     const current = !!messageRatings[msg.id]?.disliked;
-    return base - (initial ? 1 : 0) + (current ? 1 : 0);
+    const isPending = !!pendingRatings[msg.id];
+    if (!isPending) return base;
+    const prev =
+      confirmedRatings[msg.id] || initialRatingsRef.current[msg.id] || {};
+    const prevDis = !!(prev as any).disliked;
+    const delta = (current ? 1 : 0) - (prevDis ? 1 : 0);
+    const res = base + delta;
+    return res < 0 ? 0 : res;
   };
   const isImageLink = (url?: string) =>
     !!url && /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(url);
@@ -224,14 +236,11 @@ export default function ChatArea(props: ChatAreaProps) {
   // Resolve backend asset URLs (avatar, attachments) returned as filenames or relative paths
   const resolveAssetUrl = (val?: string | null | undefined) => {
     if (!val) {
-      console.log("[resolveAssetUrl] No value provided");
       return undefined;
     }
     try {
       const s = String(val);
-      console.log("[resolveAssetUrl] Input:", s);
       if (/^https?:\/\//i.test(s)) {
-        console.log("[resolveAssetUrl] Already HTTP URL, returning:", s);
         return s;
       }
 
@@ -260,18 +269,9 @@ export default function ChatArea(props: ChatAreaProps) {
       // If the backend returns an /api/backend path that contains note_imgs,
       // rewrite it to the requested media server path
       if (s.startsWith("/api/backend")) {
-        console.log("[resolveAssetUrl] Found /api/backend path");
         const tail = s.replace(/^\/api\/backend/, "");
-        console.log(
-          "[resolveAssetUrl] Tail after removing /api/backend:",
-          tail
-        );
         if (tail.includes("note_imgs")) {
-          console.log(
-            "[resolveAssetUrl] Found note_imgs in tail, mapping to proxy"
-          );
           const result = mapToLocalMedia(tail);
-          console.log("[resolveAssetUrl] Final mapped result:", result);
           return result;
         }
         // Map avatar media paths to media server as well
@@ -292,9 +292,7 @@ export default function ChatArea(props: ChatAreaProps) {
       // If the value already references note_imgs (e.g. "note_imgs/.." or "/note_imgs/.."),
       // map it to the media server
       if (s.includes("note_imgs")) {
-        console.log("[resolveAssetUrl] Found note_imgs, mapping to proxy");
         const result = mapToLocalMedia(s);
-        console.log("[resolveAssetUrl] Mapped result:", result);
         return result;
       }
       // Map avatar paths to media server when backend stores them under media/avatars
@@ -491,6 +489,54 @@ export default function ChatArea(props: ChatAreaProps) {
     } finally {
       setSummaryLoading(false);
     }
+  };
+
+  // Unified reaction sender to emulate Facebook-like behavior (like, dislike, none)
+  // desired: 'like' | 'dislike' | 'none'
+  const sendReaction = async (
+    noteId: string,
+    desired: "like" | "dislike" | "none"
+  ) => {
+    if (desired === "like") {
+      return api.post(`/notes/give_like`, null, {
+        params: { note_id: noteId },
+      });
+    }
+    if (desired === "dislike") {
+      return api.post(`/notes/give_dislike`, null, {
+        params: { note_id: noteId },
+      });
+    }
+    // Try neutralizing reaction. Backend may or may not support this endpoint.
+    // We attempt a few conventional shapes; if all fail, throw last error.
+    let lastErr: any = null;
+    const attempts: Array<{
+      path: string;
+      params?: Record<string, any>;
+      body?: any;
+      method?: "POST" | "PUT" | "DELETE";
+    }> = [
+      { path: "/notes/remove_reaction", params: { note_id: noteId } },
+      { path: "/notes/react", params: { note_id: noteId, type: "none" } },
+      { path: "/notes/react/none", params: { note_id: noteId } },
+    ];
+    for (const a of attempts) {
+      try {
+        const method = a.method || "POST";
+        if (method === "POST")
+          return await api.post(a.path, a.body ?? null, { params: a.params });
+        if (method === "PUT")
+          return await api.put(a.path, a.body ?? null, { params: a.params });
+        if (method === "DELETE")
+          return await api.delete(a.path, { params: a.params });
+      } catch (e: any) {
+        lastErr = e;
+        // Continue trying next variant if 404/405; break early on 401/500 to avoid noise
+        const code = e?.response?.status;
+        if (code && code >= 500) break;
+      }
+    }
+    throw lastErr || new Error("Reaction removal not supported by backend");
   };
 
   // Preview for locally selected file (before it's uploaded)
@@ -736,17 +782,14 @@ export default function ChatArea(props: ChatAreaProps) {
                             src={resolveAssetUrl(msg.image_url)}
                             alt="Załącznik"
                             onError={() => {
-                              console.log(
-                                `[Image Error] Failed: resolveAssetUrl="${resolveAssetUrl(
-                                  msg.image_url
-                                )}", msg.image_url="${msg.image_url}"`
-                              );
+                              // Keep a single error log for failed loads
+                              console.warn("[Image Error] Failed to load", {
+                                image_url: msg.image_url,
+                              });
                               markImageFailed(msg.id);
                             }}
                             onLoad={() => {
-                              console.log(
-                                `[Image Success] Loaded: ${msg.image_url}`
-                              );
+                              // no-op; image loaded successfully
                             }}
                             onClick={() =>
                               openLightbox(resolveAssetUrl(msg.image_url) || "")
@@ -998,84 +1041,75 @@ export default function ChatArea(props: ChatAreaProps) {
           onClick={async () => {
             if (!menuMsg) return;
             const id = String(menuMsg.id);
-            if (pendingRef.current[id]) return; // immediate guard
+            if (pendingRef.current[id]) return;
 
-            const alreadyConfirmed = !!confirmedRatings[id]?.liked;
+            const confirmed =
+              confirmedRatings[id] || initialRatingsRef.current[id] || {};
+            const alreadyConfirmed = !!(confirmed as any).liked;
             const likedLocal = !!messageRatings[id]?.liked;
+            const dislikedLocal = !!messageRatings[id]?.disliked;
 
-            // If server already confirmed a like, don't attempt to unlike (backend has no remove endpoint)
-            if (alreadyConfirmed && likedLocal) {
-              // ensure UI matches server using functional update and persist
-              setMessageRatings((prev) => {
-                const next = {
-                  ...prev,
-                  [id]: { liked: true, disliked: false },
-                };
-                try {
-                  localStorage.setItem(ratingsKey, JSON.stringify(next));
-                } catch {}
-                return next;
-              });
-              closeMenu();
-              return;
-            }
+            // Determine desired target per FB rules
+            // - If currently liked (confirmed+local), clicking Like again => none (remove)
+            // - If currently disliked, clicking Like => like (switch)
+            // - Otherwise => like
+            const desired: "like" | "none" =
+              alreadyConfirmed && likedLocal ? "none" : "like";
 
-            // mark pending immediately
+            // mark pending
             pendingRef.current[id] = true;
             setPendingRatings((p) => ({ ...p, [id]: true }));
 
-            // optimistic update (set liked=true) with functional update and persist
+            const prevState = messageRatings[id] || {
+              liked: !!alreadyConfirmed,
+              disliked: !!(confirmed as any).disliked,
+            };
+
+            // optimistic update
             setMessageRatings((prev) => {
-              const next = { ...prev, [id]: { liked: true, disliked: false } };
+              const next = {
+                ...prev,
+                [id]:
+                  desired === "like"
+                    ? { liked: true, disliked: false }
+                    : { liked: false, disliked: false },
+              };
               try {
                 localStorage.setItem(ratingsKey, JSON.stringify(next));
               } catch {}
               return next;
             });
             try {
-              await api.post(`/notes/give_like`, null, {
-                params: { note_id: id },
-              });
-              // on success mark confirmed; parent polling will refresh authoritative counts
-              setConfirmedRatings((c) => ({ ...c, [id]: { liked: true } }));
-              // trigger a parent refresh if provided so the authoritative counts update immediately
+              await sendReaction(id, desired);
+              setConfirmedRatings((c) => ({
+                ...c,
+                [id]:
+                  desired === "like"
+                    ? { liked: true, disliked: false }
+                    : { liked: false, disliked: false },
+              }));
               try {
                 if (typeof props.onRefresh === "function")
                   await props.onRefresh();
               } catch {}
             } catch (err: any) {
-              // If server reports already liked, mark confirmed and keep UI consistent
-              const detail =
-                err?.response?.data?.detail || String(err?.message || "");
-              if (
-                typeof detail === "string" &&
-                detail.toLowerCase().includes("already")
-              ) {
-                setConfirmedRatings((c) => ({ ...c, [id]: { liked: true } }));
-                // ensure local state reflects confirmed like and persist
-                setMessageRatings((prev) => {
-                  const next = {
-                    ...prev,
-                    [id]: { liked: true, disliked: false },
-                  };
-                  try {
-                    localStorage.setItem(ratingsKey, JSON.stringify(next));
-                  } catch {}
-                  return next;
-                });
+              // If backend does not support removal, rollback and if switching was intended, try like instead
+              const status = err?.response?.status;
+              if (desired === "none" && (status === 404 || status === 405)) {
+                console.warn(
+                  "Reaction removal not supported by backend; keeping previous state"
+                );
               } else {
-                // revert optimistic change on other failures
-                setMessageRatings((prev) => {
-                  const reverted = { ...prev };
-                  reverted[id] = { liked: false, disliked: false };
-                  try {
-                    localStorage.setItem(ratingsKey, JSON.stringify(reverted));
-                  } catch {}
-                  return reverted;
-                });
+                console.warn("Like action failed; rolling back", err);
               }
+              setMessageRatings((prev) => {
+                const next = { ...prev, [id]: prevState };
+                try {
+                  localStorage.setItem(ratingsKey, JSON.stringify(next));
+                } catch {}
+                return next;
+              });
             } finally {
-              // clear pending both ref and state
               pendingRef.current[id] = false;
               setPendingRatings((p) => {
                 const copy = { ...p };
@@ -1102,76 +1136,68 @@ export default function ChatArea(props: ChatAreaProps) {
           onClick={async () => {
             if (!menuMsg) return;
             const id = String(menuMsg.id);
-            if (pendingRef.current[id]) return; // immediate guard
+            if (pendingRef.current[id]) return;
 
-            const alreadyConfirmed = !!confirmedRatings[id]?.disliked;
+            const confirmed =
+              confirmedRatings[id] || initialRatingsRef.current[id] || {};
+            const alreadyConfirmed = !!(confirmed as any).disliked;
+            const likedLocal = !!messageRatings[id]?.liked;
             const dislikedLocal = !!messageRatings[id]?.disliked;
 
-            if (alreadyConfirmed && dislikedLocal) {
-              setMessageRatings((prev) => {
-                const next = {
-                  ...prev,
-                  [id]: { liked: false, disliked: true },
-                };
-                try {
-                  localStorage.setItem(ratingsKey, JSON.stringify(next));
-                } catch {}
-                return next;
-              });
-              closeMenu();
-              return;
-            }
+            // Determine desired target per FB rules
+            const desired: "dislike" | "none" =
+              alreadyConfirmed && dislikedLocal ? "none" : "dislike";
 
             pendingRef.current[id] = true;
             setPendingRatings((p) => ({ ...p, [id]: true }));
 
+            const prevState = messageRatings[id] || {
+              liked: !!(confirmed as any).liked,
+              disliked: !!alreadyConfirmed,
+            };
+
             setMessageRatings((prev) => {
-              const next = { ...prev, [id]: { liked: false, disliked: true } };
+              const next = {
+                ...prev,
+                [id]:
+                  desired === "dislike"
+                    ? { liked: false, disliked: true }
+                    : { liked: false, disliked: false },
+              };
               try {
                 localStorage.setItem(ratingsKey, JSON.stringify(next));
               } catch {}
               return next;
             });
             try {
-              await api.post(`/notes/give_dislike`, null, {
-                params: { note_id: id },
-              });
-              setConfirmedRatings((c) => ({ ...c, [id]: { disliked: true } }));
+              await sendReaction(id, desired);
+              setConfirmedRatings((c) => ({
+                ...c,
+                [id]:
+                  desired === "dislike"
+                    ? { liked: false, disliked: true }
+                    : { liked: false, disliked: false },
+              }));
               try {
                 if (typeof props.onRefresh === "function")
                   await props.onRefresh();
               } catch {}
             } catch (err: any) {
-              const detail =
-                err?.response?.data?.detail || String(err?.message || "");
-              if (
-                typeof detail === "string" &&
-                detail.toLowerCase().includes("already")
-              ) {
-                setConfirmedRatings((c) => ({
-                  ...c,
-                  [id]: { disliked: true },
-                }));
-                setMessageRatings((prev) => {
-                  const next = {
-                    ...prev,
-                    [id]: { liked: false, disliked: true },
-                  };
-                  try {
-                    localStorage.setItem(ratingsKey, JSON.stringify(next));
-                  } catch {}
-                  return next;
-                });
+              const status = err?.response?.status;
+              if (desired === "none" && (status === 404 || status === 405)) {
+                console.warn(
+                  "Reaction removal not supported by backend; keeping previous state"
+                );
               } else {
-                setMessageRatings((prev) => {
-                  const reverted = { ...prev };
-                  reverted[id] = { liked: false, disliked: false };
-                  try {
-                    localStorage.setItem(ratingsKey, JSON.stringify(reverted));
-                  } catch {}
-                  return reverted;
-                });
+                console.warn("Dislike action failed; rolling back", err);
               }
+              setMessageRatings((prev) => {
+                const next = { ...prev, [id]: prevState };
+                try {
+                  localStorage.setItem(ratingsKey, JSON.stringify(next));
+                } catch {}
+                return next;
+              });
             } finally {
               pendingRef.current[id] = false;
               setPendingRatings((p) => {

@@ -60,10 +60,15 @@ async function handleBackendRequest(
     const searchParams = request.nextUrl.searchParams.toString();
     const fullUrl = searchParams ? `${url}?${searchParams}` : url;
 
-    console.log(`Proxying ${method} request to: ${fullUrl}`);
-    console.log("Incoming Content-Type:", headers["content-type"]);
-    console.log("Path parts:", pathParts);
-    console.log("Path:", path);
+    const debug =
+      process.env.NODE_ENV !== "production" &&
+      process.env.NEXT_PUBLIC_API_DEBUG === "1";
+    if (debug) {
+      console.debug(`API proxy -> ${method} ${fullUrl}`);
+      if (headers["content-type"]) {
+        console.debug("Content-Type:", headers["content-type"]);
+      }
+    }
 
     // Prepare outgoing body
     let outgoingBody: BodyInit | undefined = undefined;
@@ -97,13 +102,38 @@ async function handleBackendRequest(
       }
     }
 
-    const response = await fetch(fullUrl, {
+    // First request with manual redirect handling to avoid body re-use issues on 307/308
+    let response = await fetch(fullUrl, {
       method,
       headers,
       body: outgoingBody,
+      redirect: "manual",
     } as RequestInit);
 
-    console.log(`Backend response status: ${response.status}`);
+    // Handle a single redirect hop (e.g., /organizations -> /organizations/)
+    if ([301, 302, 303, 307, 308].includes(response.status)) {
+      const location = response.headers.get("location");
+      if (location) {
+        // Build absolute URL from possible relative Location
+        const redirectedUrl = new URL(location, fullUrl).toString();
+        const followMethod = response.status === 303 ? "GET" : method;
+        const followBody =
+          followMethod === "GET" || followMethod === "HEAD"
+            ? undefined
+            : outgoingBody;
+        if (debug)
+          console.debug(
+            `API proxy following redirect -> ${response.status} ${redirectedUrl}`
+          );
+        response = await fetch(redirectedUrl, {
+          method: followMethod,
+          headers,
+          body: followBody,
+        } as RequestInit);
+      }
+    }
+
+    if (debug) console.debug(`API proxy <- ${response.status} ${fullUrl}`);
 
     // Stream the backend response back unchanged (works for JSON and binary)
     const proxyResponse = new NextResponse(response.body, {

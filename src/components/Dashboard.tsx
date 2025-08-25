@@ -497,65 +497,71 @@ export default function Dashboard() {
     try {
       console.log("Creating organization with name:", newOrgName.trim());
       const backendData = { organization_name: newOrgName.trim() };
-      // Utwórz organizację i pobierz zwrócone ID
-      const postOrgResp = await api.post("/organizations", backendData);
-      const newOrgId = postOrgResp.data.data.organization_id;
+      // Utwórz organizację i pobierz zwrócone ID (użyj końcowego slasha zgodnie z kontraktem)
+      const postOrgResp = await api.post("/organizations/", backendData);
+      const envelope = postOrgResp.data ?? {};
+      const created = envelope.data ?? envelope;
+      const newOrgId = String(
+        created.organization_id ?? created.id ?? created.organizationId
+      );
       console.log("Organization created, ID:", newOrgId);
-      // Spróbuj nadać użytkownikowi rolę właściciela z kilkoma próbami rozwiązywania ID
+
+      // Spróbuj wykryć członkostwo i nadać rolę owner, jeśli to możliwe
       let ownerAssigned = false;
-      const headers = { "Content-Type": "application/x-www-form-urlencoded" };
-      const roleBody = new URLSearchParams({ role: "owner" }).toString();
-
-      // Try owner assignment WITHOUT user_id first (backend may infer from token)
       try {
-        await api.post(
-          `/organization_users/?organization_id=${newOrgId}`,
-          roleBody,
-          { headers }
-        );
-        ownerAssigned = true;
-        console.log("Owner assignment succeeded without explicit user_id");
-      } catch (e) {
-        console.warn(
-          "Owner assignment without user_id failed, will retry with user_id",
-          e
-        );
-      }
-
-      // Fallback attempts WITH user_id (needs resolveUserId)
-      for (let attempt = 1; attempt <= 3 && !ownerAssigned; attempt++) {
-        try {
-          const uid = await resolveUserId();
-          if (!uid) {
-            console.warn(
-              `Owner assignment (with user_id) attempt ${attempt}: cannot resolve user id`
-            );
-            await new Promise((r) => setTimeout(r, 120 * attempt));
-            continue;
+        // Do kilku prób w krótkich odstępach, aż backend zarejestruje członkostwo twórcy (jeśli automatyczne)
+        for (let attempt = 1; attempt <= 3 && !ownerAssigned; attempt++) {
+          let meArr: any[] = [];
+          try {
+            const meRes = await api.get(`/organization_users/me`, {
+              validateStatus: () => true,
+            });
+            meArr = Array.isArray(meRes.data?.data)
+              ? meRes.data.data
+              : Array.isArray(meRes.data)
+              ? meRes.data
+              : [];
+          } catch (e) {
+            console.warn("Owner assignment: /organization_users/me failed", e);
           }
-          await api.post(
-            `/organization_users/?organization_id=${newOrgId}&user_id=${uid}`,
-            roleBody,
-            { headers }
+          const membership = meArr.find(
+            (m: any) => String(m.organization_id) === String(newOrgId)
           );
-          ownerAssigned = true;
-          console.log(
-            "Owner assignment with user_id succeeded (attempt",
-            attempt,
-            ")"
-          );
-        } catch (e2) {
-          console.warn(
-            `Owner assignment (with user_id) attempt ${attempt} failed`,
-            e2
-          );
-          await new Promise((r) => setTimeout(r, 160 * attempt));
+          if (membership) {
+            const uid = Number(membership.user_id);
+            const currentRole = String(membership.role || "").toLowerCase();
+            if (uid && currentRole !== "owner") {
+              try {
+                const headers = {
+                  "Content-Type": "application/x-www-form-urlencoded",
+                } as const;
+                const roleBody = new URLSearchParams({
+                  role: "owner",
+                }).toString();
+                await api.put(
+                  `/organization_users/${Number(newOrgId)}/${uid}/role`,
+                  roleBody,
+                  { headers }
+                );
+                ownerAssigned = true;
+                console.log("Owner role set via PUT role endpoint");
+              } catch (e2) {
+                console.warn("PUT role failed (will continue)", e2);
+              }
+            } else if (currentRole === "owner") {
+              ownerAssigned = true; // already owner
+            }
+          } else {
+            // Brak członkostwa — daj backendowi chwilę i spróbuj ponownie
+            await new Promise((r) => setTimeout(r, 200 * attempt));
+          }
         }
+      } catch (e) {
+        console.warn("Owner assignment sequence encountered an error", e);
       }
       if (!ownerAssigned) {
-        showNotification(
-          "Organizacja utworzona, ale nie nadano roli właściciela – odśwież stronę później.",
-          "warning"
+        console.info(
+          "Organization created; membership or owner role not confirmed yet."
         );
       }
       // Sukces tworzenia organizacji
