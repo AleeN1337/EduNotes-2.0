@@ -45,20 +45,6 @@ async function handleBackendRequest(
     const hasTrailingSlash = originalPathname.endsWith("/");
     const url = `${backendUrl}/${path}${hasTrailingSlash ? "/" : ""}`;
 
-    // Get the request body if it exists
-    let body;
-    if (method !== "GET" && method !== "DELETE") {
-      try {
-        body = await request.text();
-        // Nie loguj pełnych treści (mogą zawierać hasła/tokeny)
-        console.log("Request body length:", body?.length || 0);
-        console.log("Request body type:", typeof body);
-      } catch (error) {
-        // If there's no body, that's fine
-        body = undefined;
-      }
-    }
-
     // Forward headers (including Authorization)
     const headers: Record<string, string> = {};
     request.headers.forEach((value, key) => {
@@ -75,32 +61,61 @@ async function handleBackendRequest(
     const fullUrl = searchParams ? `${url}?${searchParams}` : url;
 
     console.log(`Proxying ${method} request to: ${fullUrl}`);
-    console.log("Content-Type being sent:", headers["content-type"]);
+    console.log("Incoming Content-Type:", headers["content-type"]);
     console.log("Path parts:", pathParts);
     console.log("Path:", path);
-    if (body === undefined) {
-      console.log("No body content");
+
+    // Prepare outgoing body
+    let outgoingBody: BodyInit | undefined = undefined;
+    if (method !== "GET" && method !== "DELETE") {
+      const ct = (headers["content-type"] || "").toLowerCase();
+      const isMultipart = ct.includes("multipart/form-data");
+      if (isMultipart) {
+        try {
+          // Best-effort: forward the exact original bytes (preserve original boundary header)
+          const blob = await request.blob();
+          outgoingBody = blob as unknown as BodyInit;
+        } catch (e) {
+          // Fallback: rebuild a fresh FormData so fetch sets a new boundary correctly
+          const incoming = await request.formData();
+          const fd = new FormData();
+          for (const [key, val] of incoming.entries()) {
+            if (val instanceof File) {
+              fd.append(key, val, (val as File).name);
+            } else {
+              fd.append(key, String(val));
+            }
+          }
+          // Let fetch set the correct multipart boundary
+          delete headers["content-type"];
+          outgoingBody = fd as unknown as BodyInit;
+        }
+      } else {
+        // Forward raw bytes for JSON, x-www-form-urlencoded, etc.
+        const buf = await request.arrayBuffer();
+        outgoingBody = buf as unknown as BodyInit;
+      }
     }
 
     const response = await fetch(fullUrl, {
       method,
       headers,
-      body,
-    });
-
-    const responseText = await response.text();
+      body: outgoingBody,
+    } as RequestInit);
 
     console.log(`Backend response status: ${response.status}`);
 
-    // Create response with same status and headers
-    const proxyResponse = new NextResponse(responseText, {
+    // Stream the backend response back unchanged (works for JSON and binary)
+    const proxyResponse = new NextResponse(response.body, {
       status: response.status,
       statusText: response.statusText,
     });
 
     // Forward response headers
     response.headers.forEach((value, key) => {
-      proxyResponse.headers.set(key, value);
+      try {
+        proxyResponse.headers.set(key, value);
+      } catch {}
     });
 
     return proxyResponse;

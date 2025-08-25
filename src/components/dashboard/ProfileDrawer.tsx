@@ -50,13 +50,46 @@ export default function ProfileDrawer({
 }: ProfileDrawerProps) {
   const router = useRouter();
   const [localAvatar, setLocalAvatar] = React.useState<string | null>(
-    (userProfile as any)?.avatar_url || (user as any)?.avatar_url || null
+    resolveAvatarUrl(
+      (userProfile as any)?.avatar_url || (user as any)?.avatar_url || null
+    )
   );
   const [uploadingAvatar, setUploadingAvatar] = React.useState(false);
 
+  // Helper to resolve avatar URLs from backend database paths to media server
+  function resolveAvatarUrl(avatarPath?: string | null): string | null {
+    if (!avatarPath) return null;
+    try {
+      const s = String(avatarPath);
+      if (/^https?:\/\//i.test(s)) return s;
+
+      // Extract filename from database path like "app/media/avatars/filename.jpg"
+      const extractFilename = (path: string) => {
+        const segments = path.split("/").filter(Boolean);
+        return segments[segments.length - 1] || path;
+      };
+
+      if (s.includes("avatars") || s.includes("avatar")) {
+        const filename = extractFilename(s);
+        return `http://localhost:8000/media/avatars/${filename}`;
+      }
+
+      // If it's just a filename, assume it's an avatar
+      if (!s.includes("/")) {
+        return `http://localhost:8000/media/avatars/${s}`;
+      }
+
+      return s;
+    } catch {
+      return null;
+    }
+  }
+
   React.useEffect(() => {
     setLocalAvatar(
-      (userProfile as any)?.avatar_url || (user as any)?.avatar_url || null
+      resolveAvatarUrl(
+        (userProfile as any)?.avatar_url || (user as any)?.avatar_url || null
+      )
     );
   }, [userProfile, user]);
 
@@ -69,7 +102,8 @@ export default function ProfileDrawer({
       const data = res.data ?? (res as any);
       const avatar = data?.avatar_url ?? null;
       if (avatar) {
-        setLocalAvatar(avatar);
+        const resolvedUrl = resolveAvatarUrl(avatar);
+        setLocalAvatar(resolvedUrl);
         // Persist to localStorage.user if present
         try {
           const raw = localStorage.getItem("user");
@@ -77,8 +111,8 @@ export default function ProfileDrawer({
             const parsed = JSON.parse(raw);
             const normalized = {
               ...parsed,
-              avatar: avatar,
-              avatar_url: avatar,
+              avatar: resolvedUrl,
+              avatar_url: resolvedUrl,
             };
             localStorage.setItem("user", JSON.stringify(normalized));
           }

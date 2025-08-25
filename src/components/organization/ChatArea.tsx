@@ -223,10 +223,17 @@ export default function ChatArea(props: ChatAreaProps) {
 
   // Resolve backend asset URLs (avatar, attachments) returned as filenames or relative paths
   const resolveAssetUrl = (val?: string | null | undefined) => {
-    if (!val) return undefined;
+    if (!val) {
+      console.log("[resolveAssetUrl] No value provided");
+      return undefined;
+    }
     try {
       const s = String(val);
-      if (/^https?:\/\//i.test(s)) return s;
+      console.log("[resolveAssetUrl] Input:", s);
+      if (/^https?:\/\//i.test(s)) {
+        console.log("[resolveAssetUrl] Already HTTP URL, returning:", s);
+        return s;
+      }
 
       // Per requirement: map any path that references note_imgs to the
       // media server URL: http://localhost:8000/media/note_imgs/<filename>
@@ -244,17 +251,28 @@ export default function ChatArea(props: ChatAreaProps) {
         }
         // Ensure leading slash
         if (!suffix.startsWith("/")) suffix = `/${suffix}`;
-        return `http://localhost:8000/media/note_imgs${encodeURIComponent(
-          suffix
-        )}`.replace(/%2F/g, "/");
+        // Use our Next.js image proxy to handle CORS and Content-Type issues
+        return `/api/image-proxy?url=${encodeURIComponent(
+          `http://localhost:8000/media/note_imgs${suffix}`
+        )}`;
       };
 
       // If the backend returns an /api/backend path that contains note_imgs,
       // rewrite it to the requested media server path
       if (s.startsWith("/api/backend")) {
+        console.log("[resolveAssetUrl] Found /api/backend path");
         const tail = s.replace(/^\/api\/backend/, "");
+        console.log(
+          "[resolveAssetUrl] Tail after removing /api/backend:",
+          tail
+        );
         if (tail.includes("note_imgs")) {
-          return mapToLocalMedia(tail);
+          console.log(
+            "[resolveAssetUrl] Found note_imgs in tail, mapping to proxy"
+          );
+          const result = mapToLocalMedia(tail);
+          console.log("[resolveAssetUrl] Final mapped result:", result);
+          return result;
         }
         // Map avatar media paths to media server as well
         if (tail.includes("avatars") || tail.includes("avatar")) {
@@ -264,9 +282,9 @@ export default function ChatArea(props: ChatAreaProps) {
             idxA !== -1 ? tail.slice(idxA + "avatars".length) : tail;
           let sfx = suffixA;
           if (!sfx.startsWith("/")) sfx = `/${sfx}`;
-          return `http://localhost:8000/media/avatars${encodeURIComponent(
-            sfx
-          )}`.replace(/%2F/g, "/");
+          return `/api/image-proxy?url=${encodeURIComponent(
+            `http://localhost:8000/media/avatars${sfx}`
+          )}`;
         }
         return s;
       }
@@ -274,7 +292,10 @@ export default function ChatArea(props: ChatAreaProps) {
       // If the value already references note_imgs (e.g. "note_imgs/.." or "/note_imgs/.."),
       // map it to the media server
       if (s.includes("note_imgs")) {
-        return mapToLocalMedia(s);
+        console.log("[resolveAssetUrl] Found note_imgs, mapping to proxy");
+        const result = mapToLocalMedia(s);
+        console.log("[resolveAssetUrl] Mapped result:", result);
+        return result;
       }
       // Map avatar paths to media server when backend stores them under media/avatars
       if (s.includes("avatars") || s.includes("avatar")) {
@@ -282,9 +303,9 @@ export default function ChatArea(props: ChatAreaProps) {
         const idx = s.indexOf("avatars");
         let suffix = idx !== -1 ? s.slice(idx + "avatars".length) : s;
         if (!suffix.startsWith("/")) suffix = `/${suffix}`;
-        return `http://localhost:8000/media/avatars${encodeURIComponent(
-          suffix
-        )}`.replace(/%2F/g, "/");
+        return `/api/image-proxy?url=${encodeURIComponent(
+          `http://localhost:8000/media/avatars${suffix}`
+        )}`;
       }
 
       // Otherwise map to backend proxy endpoint as before
@@ -298,7 +319,9 @@ export default function ChatArea(props: ChatAreaProps) {
   const [menuAnchor, setMenuAnchor] = React.useState<null | HTMLElement>(null);
   const [menuMsg, setMenuMsg] = React.useState<Message | null>(null);
   // Track pending like/dislike requests per message to avoid double submits
-  const [pendingRatings, setPendingRatings] = React.useState<Record<string, boolean>>({});
+  const [pendingRatings, setPendingRatings] = React.useState<
+    Record<string, boolean>
+  >({});
   // ref mirror for immediate synchronous checks inside handlers
   const pendingRef = React.useRef<Record<string, boolean>>({});
   // Confirmed ratings reflect server-acknowledged likes/dislikes
@@ -317,73 +340,7 @@ export default function ChatArea(props: ChatAreaProps) {
   const markImageFailed = (id: string) =>
     setFailedImages((prev) => ({ ...prev, [id]: true }));
 
-  // Blob URL cache for protected images
-  const [imageBlobUrls, setImageBlobUrls] = React.useState<
-    Record<string, string>
-  >({});
-  React.useEffect(() => {
-    let cancelled = false;
-    const token =
-      typeof window !== "undefined" ? localStorage.getItem("auth_token") : null;
-    const candidates = messages.filter(
-      (m) =>
-        m.image_url &&
-        (isImageLink(m.image_url) ||
-          (m.content_type || "").toLowerCase().startsWith("image")) &&
-        !imageBlobUrls[m.id]
-    );
-    candidates.forEach(async (m) => {
-      try {
-        // Use resolved asset URL (may map note_imgs -> media server) so we fetch the correct location
-        const toFetch =
-          resolveAssetUrl(m.image_url as string) || (m.image_url as string);
-
-        // Avoid fetching cross-origin static media (e.g. http://localhost:8000) because
-        // fetch() will trigger CORS preflight when custom headers are present. Static
-        // media should be loaded directly by the <img> element (no JS fetch) which
-        // does not require CORS to display the image. Only prefetch when the resource
-        // is same-origin or served via the backend proxy and may require Authorization.
-        try {
-          const isHttp = /^https?:\/\//i.test(toFetch);
-          const origin =
-            typeof window !== "undefined" ? window.location.origin : "";
-          const isSameOrigin = isHttp ? toFetch.startsWith(origin) : !isHttp;
-          const looksLikeBackendProxy =
-            String(toFetch).includes("/api/backend");
-
-          if (!isSameOrigin && !looksLikeBackendProxy) {
-            // skip prefetch for cross-origin static media (let <img> load it)
-            return;
-          }
-        } catch {
-          // if anything goes wrong deciding origin, fall back to letting <img> handle it
-          return;
-        }
-
-        const headers = token
-          ? { Authorization: `Bearer ${token}` }
-          : undefined;
-        const resp = await fetch(toFetch, { headers });
-        if (!resp.ok) throw new Error("image fetch failed");
-        const blob = await resp.blob();
-        const url = URL.createObjectURL(blob);
-        if (!cancelled) {
-          setImageBlobUrls((prev) => ({ ...prev, [m.id]: url }));
-        }
-      } catch {
-        // leave it to try direct URL; onError will show link
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [messages, imageBlobUrls]);
-  // Revoke blob URLs on unmount
-  React.useEffect(() => {
-    return () => {
-      Object.values(imageBlobUrls).forEach((u) => URL.revokeObjectURL(u));
-    };
-  }, [imageBlobUrls]);
+  // Images are now served directly through proxy - no need for blob URL cache
 
   // Locally order messages so newest appear at the bottom
   const orderedMessages = React.useMemo(() => {
@@ -776,18 +733,23 @@ export default function ChatArea(props: ChatAreaProps) {
                       (!failedImages[msg.id] ? (
                         <Box sx={{ mt: 0.5, mb: 1 }}>
                           <img
-                            src={
-                              imageBlobUrls[msg.id] ||
-                              resolveAssetUrl(msg.image_url)
-                            }
+                            src={resolveAssetUrl(msg.image_url)}
                             alt="Załącznik"
-                            onError={() => markImageFailed(msg.id)}
+                            onError={() => {
+                              console.log(
+                                `[Image Error] Failed: resolveAssetUrl="${resolveAssetUrl(
+                                  msg.image_url
+                                )}", msg.image_url="${msg.image_url}"`
+                              );
+                              markImageFailed(msg.id);
+                            }}
+                            onLoad={() => {
+                              console.log(
+                                `[Image Success] Loaded: ${msg.image_url}`
+                              );
+                            }}
                             onClick={() =>
-                              openLightbox(
-                                imageBlobUrls[msg.id] ||
-                                  resolveAssetUrl(msg.image_url) ||
-                                  ""
-                              )
+                              openLightbox(resolveAssetUrl(msg.image_url) || "")
                             }
                             style={{
                               maxWidth: "100%",
@@ -1033,7 +995,7 @@ export default function ChatArea(props: ChatAreaProps) {
         transformOrigin={{ vertical: "top", horizontal: "center" }}
       >
         <MenuItem
-            onClick={async () => {
+          onClick={async () => {
             if (!menuMsg) return;
             const id = String(menuMsg.id);
             if (pendingRef.current[id]) return; // immediate guard
@@ -1045,7 +1007,10 @@ export default function ChatArea(props: ChatAreaProps) {
             if (alreadyConfirmed && likedLocal) {
               // ensure UI matches server using functional update and persist
               setMessageRatings((prev) => {
-                const next = { ...prev, [id]: { liked: true, disliked: false } };
+                const next = {
+                  ...prev,
+                  [id]: { liked: true, disliked: false },
+                };
                 try {
                   localStorage.setItem(ratingsKey, JSON.stringify(next));
                 } catch {}
@@ -1068,21 +1033,31 @@ export default function ChatArea(props: ChatAreaProps) {
               return next;
             });
             try {
-              await api.post(`/notes/give_like`, null, { params: { note_id: id } });
+              await api.post(`/notes/give_like`, null, {
+                params: { note_id: id },
+              });
               // on success mark confirmed; parent polling will refresh authoritative counts
               setConfirmedRatings((c) => ({ ...c, [id]: { liked: true } }));
               // trigger a parent refresh if provided so the authoritative counts update immediately
               try {
-                if (typeof props.onRefresh === "function") await props.onRefresh();
+                if (typeof props.onRefresh === "function")
+                  await props.onRefresh();
               } catch {}
             } catch (err: any) {
               // If server reports already liked, mark confirmed and keep UI consistent
-              const detail = err?.response?.data?.detail || String(err?.message || "");
-              if (typeof detail === "string" && detail.toLowerCase().includes("already")) {
+              const detail =
+                err?.response?.data?.detail || String(err?.message || "");
+              if (
+                typeof detail === "string" &&
+                detail.toLowerCase().includes("already")
+              ) {
                 setConfirmedRatings((c) => ({ ...c, [id]: { liked: true } }));
                 // ensure local state reflects confirmed like and persist
                 setMessageRatings((prev) => {
-                  const next = { ...prev, [id]: { liked: true, disliked: false } };
+                  const next = {
+                    ...prev,
+                    [id]: { liked: true, disliked: false },
+                  };
                   try {
                     localStorage.setItem(ratingsKey, JSON.stringify(next));
                   } catch {}
@@ -1134,7 +1109,10 @@ export default function ChatArea(props: ChatAreaProps) {
 
             if (alreadyConfirmed && dislikedLocal) {
               setMessageRatings((prev) => {
-                const next = { ...prev, [id]: { liked: false, disliked: true } };
+                const next = {
+                  ...prev,
+                  [id]: { liked: false, disliked: true },
+                };
                 try {
                   localStorage.setItem(ratingsKey, JSON.stringify(next));
                 } catch {}
@@ -1155,17 +1133,30 @@ export default function ChatArea(props: ChatAreaProps) {
               return next;
             });
             try {
-              await api.post(`/notes/give_dislike`, null, { params: { note_id: id } });
+              await api.post(`/notes/give_dislike`, null, {
+                params: { note_id: id },
+              });
               setConfirmedRatings((c) => ({ ...c, [id]: { disliked: true } }));
               try {
-                if (typeof props.onRefresh === "function") await props.onRefresh();
+                if (typeof props.onRefresh === "function")
+                  await props.onRefresh();
               } catch {}
             } catch (err: any) {
-              const detail = err?.response?.data?.detail || String(err?.message || "");
-              if (typeof detail === "string" && detail.toLowerCase().includes("already")) {
-                setConfirmedRatings((c) => ({ ...c, [id]: { disliked: true } }));
+              const detail =
+                err?.response?.data?.detail || String(err?.message || "");
+              if (
+                typeof detail === "string" &&
+                detail.toLowerCase().includes("already")
+              ) {
+                setConfirmedRatings((c) => ({
+                  ...c,
+                  [id]: { disliked: true },
+                }));
                 setMessageRatings((prev) => {
-                  const next = { ...prev, [id]: { liked: false, disliked: true } };
+                  const next = {
+                    ...prev,
+                    [id]: { liked: false, disliked: true },
+                  };
                   try {
                     localStorage.setItem(ratingsKey, JSON.stringify(next));
                   } catch {}

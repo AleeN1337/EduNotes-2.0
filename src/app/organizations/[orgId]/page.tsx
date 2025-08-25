@@ -581,42 +581,25 @@ export default function OrganizationPage() {
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (file) {
+      // Check file size (1MB limit to match backend)
+      const maxSizeBytes = 1024 * 1024; // 1MB
+      const fileSizeMB = (file.size / 1024 / 1024).toFixed(1);
+
+      if (file.size > maxSizeBytes) {
+        alert(
+          `Plik jest zbyt duży (${fileSizeMB}MB). Maksymalny rozmiar to 1MB.`
+        );
+        event.target.value = ""; // Clear the input
+        return;
+      }
+
+      console.log(`Selected file: ${file.name} (${fileSizeMB}MB)`);
       setSelectedFile(file);
     }
   };
 
   // Upload file function
-  const uploadFile = async () => {
-    if (!selectedFile) return;
-
-    const formData = new FormData();
-    formData.append("file", selectedFile);
-
-    try {
-      // POST directly to the Next.js app route /api/uploads so we don't go through
-      // the external `api` baseURL (which may point to /api/backend).
-      const uploadUrl = `/api/uploads?orgId=${encodeURIComponent(
-        String(orgId)
-      )}`;
-      const resp = await fetch(uploadUrl, {
-        method: "POST",
-        body: formData,
-      });
-      if (!resp.ok) {
-        const txt = await resp.text().catch(() => "");
-        throw new Error(`Upload failed: ${resp.status} ${txt}`);
-      }
-      const data = await resp.json();
-      console.log("File uploaded successfully:", data);
-      setSelectedFile(null);
-
-      // The app route returns { url: publicPath, filename, contentType }
-      return data.url || data.file_url || null;
-    } catch (error) {
-      console.error("Error uploading file:", error);
-      return null;
-    }
-  };
+  // (removed legacy local upload fallback; backend handles file saving via /notes/)
 
   // Select first channel by default
   useEffect(() => {
@@ -664,8 +647,8 @@ export default function OrganizationPage() {
   }, [selectedTopic]);
 
   // Helpers to map/fetch messages
-  const mapNotesToMessages = (raw: any[]): Message[] =>
-    (raw as any[]).map((m: any) => {
+  const mapNotesToMessages = (raw: any[]): Message[] => {
+    const result = (raw as any[]).map((m: any) => {
       // Helper: try to extract a usable URL/path from many possible backend shapes
       const extractUrl = (obj: any): string | undefined => {
         if (!obj) return undefined;
@@ -735,7 +718,7 @@ export default function OrganizationPage() {
           : `/api/backend${urlStr.startsWith("/") ? "" : "/"}${urlStr}`;
       }
 
-      return {
+      const messageData = {
         id: normalizeId(m, ["note_id", "id"]),
         content: m.content,
         created_at: m.created_at,
@@ -745,7 +728,28 @@ export default function OrganizationPage() {
         likes: typeof m.likes === "number" ? m.likes : 0,
         dislikes: typeof m.dislikes === "number" ? m.dislikes : 0,
       } as Message;
+
+      // Debug logging for messages with images
+      if (image_url) {
+        console.debug("[mapNotesToMessages] Message with image:", {
+          id: messageData.id,
+          image_url: messageData.image_url,
+          original_possible: possible,
+          content_type: messageData.content_type,
+        });
+      }
+
+      return messageData;
     });
+
+    console.debug(
+      "[mapNotesToMessages] Processed",
+      result.length,
+      "messages, with images:",
+      result.filter((m) => m.image_url).length
+    );
+    return result;
+  };
 
   async function fetchMessagesForTopic(topicId: string) {
     const res = await api.get(`/notes/notes_in_topic?topic_id=${topicId}`);
@@ -924,6 +928,14 @@ export default function OrganizationPage() {
       // Prepare multipart/form-data for note creation
       const formData = new FormData();
       const hasText = newMessage.trim().length > 0;
+      const hasFile = !!selectedFile;
+      // Detect image by MIME or filename extension as a fallback
+      const extIsImage = (name?: string) =>
+        !!name && /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(name);
+      const fileIsImage =
+        !!selectedFile &&
+        (selectedFile.type?.startsWith("image/") ||
+          extIsImage(selectedFile.name));
       const titleBase = hasText
         ? newMessage.trim()
         : selectedFile?.name || "Załącznik";
@@ -935,94 +947,43 @@ export default function OrganizationPage() {
         "content",
         hasText ? newMessage.trim() : selectedFile?.name || "Załącznik"
       );
-      formData.append("topic_id", selectedTopic);
-      formData.append("organization_id", orgId);
-      // Set content type according to payload
-      const fileIsImage =
-        selectedFile && selectedFile.type?.startsWith("image/");
+      formData.append("topic_id", String(Number(selectedTopic)));
+      formData.append("organization_id", String(Number(orgId)));
+      // Set content type according to payload (backend expects 'image' when a picture is attached)
       formData.append(
         "content_type",
-        hasText ? "text" : fileIsImage ? "image" : "file"
+        hasFile ? (fileIsImage ? "image" : "file") : "text"
       );
       if (selectedFile) {
-        // Append under multiple possible field names so different backends accept the file
+        // Match backend contract: the file field is named 'image'
         formData.append("image", selectedFile);
-        try {
-          formData.append("file", selectedFile);
-        } catch {}
-        try {
-          formData.append("attachment", selectedFile);
-        } catch {}
       }
+      // Debug: list FormData entries (name -> type/value preview)
+      try {
+        const entries: any[] = [];
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        for (const [k, v] of (formData as any).entries()) {
+          if (v instanceof File) {
+            entries.push({
+              key: k,
+              value: {
+                kind: "File",
+                name: v.name,
+                size: v.size,
+                type: v.type,
+              },
+            });
+          } else {
+            entries.push({ key: k, value: String(v).slice(0, 120) });
+          }
+        }
+        console.log("Sending FormData note entries:", entries);
+      } catch {}
       console.log("Sending FormData note");
-      const response = await api.post("/notes/", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
+      const response = await api.post("/notes/", formData);
       // Unwrap created note
       const createdNote = response.data.data ?? response.data;
       console.log("Note created:", createdNote);
-
-      // If backend did not attach or return an accessible file URL, try the /upload fallback
-      const possibleUrl =
-        createdNote?.image_url ||
-        createdNote?.image ||
-        createdNote?.file_url ||
-        createdNote?.file ||
-        createdNote?.attachment_url ||
-        createdNote?.attachment ||
-        createdNote?.media_url ||
-        null;
-
-      // Helper: determine whether a value looks like a downloadable URL/path
-      const looksLikeDownloadable = (v: unknown) => {
-        if (!v) return false;
-        const s = String(v);
-        if (/^https?:\/\//i.test(s)) return true;
-        if (s.startsWith("/")) return true; // relative path - mapNotesToMessages will resolve
-        // filename with extension
-        if (/\.(png|jpe?g|gif|webp|bmp|svg|pdf|txt|docx?)($|\?)/i.test(s))
-          return true;
-        return false;
-      };
-
-      const shouldFallbackUpload =
-        !!selectedFile && (!possibleUrl || !looksLikeDownloadable(possibleUrl));
-
-      if (shouldFallbackUpload) {
-        console.warn(
-          "Note created without usable file URL, performing upload fallback",
-          createdNote
-        );
-        // Try separate upload endpoint then create a lightweight note referencing the uploaded URL
-        try {
-          const uploadedUrl = await uploadFile();
-          if (uploadedUrl) {
-            // Create a JSON note referencing the uploaded file
-            const createBody = {
-              title: titleShort,
-              content: hasText
-                ? newMessage.trim()
-                : selectedFile.name || "Załącznik",
-              topic_id: selectedTopic,
-              organization_id: orgId,
-              content_type: fileIsImage ? "image" : "file",
-              image_url: uploadedUrl,
-            } as any;
-            try {
-              await api.post("/notes/", createBody);
-            } catch (err2) {
-              console.warn(
-                "Fallback create note with uploaded URL failed:",
-                err2
-              );
-            }
-          } else {
-            console.warn("Upload endpoint returned no file URL");
-          }
-        } catch (uploadErr) {
-          console.warn("Fallback upload failed:", uploadErr);
-        }
-      }
 
       setNewMessage("");
       setSelectedFile(null);
@@ -1077,7 +1038,7 @@ export default function OrganizationPage() {
       if (topicsInChannel.length > 0) {
         for (const topic of topicsInChannel) {
           try {
-            await deleteTopicCascade(topic.id);
+            await api.delete(`/topics/${topic.id}`);
           } catch (topicError) {
             console.error(`Error deleting topic ${topic.id}:`, topicError);
             // Continue with other topics even if one fails
@@ -1119,72 +1080,6 @@ export default function OrganizationPage() {
     }
   };
 
-  // Safely delete a topic by first deleting all notes in that topic.
-  // This avoids backend 500s due to foreign key constraints (likes/images linked to notes).
-  const deleteTopicCascade = async (topicId: string) => {
-    // 1) Fetch notes in topic
-    let notes: any[] = [];
-    try {
-      const res = await api.get(`/notes/notes_in_topic`, {
-        params: { topic_id: Number(topicId) },
-        validateStatus: () => true,
-      });
-      if (res.status === 200) {
-        const raw = Array.isArray(res.data) ? res.data : unwrap<any[]>(res);
-        notes = Array.isArray(raw) ? raw : [];
-      } else if (res.status !== 404) {
-        console.warn(`notes_in_topic returned ${res.status} for topic ${topicId}`);
-      }
-    } catch (e) {
-      console.warn(`Error fetching notes for topic ${topicId}`, e);
-    }
-
-    // 2) Delete each note (attempt to remove local uploads first, then delete note)
-    for (const n of notes) {
-      const noteId = String(normalizeId(n, ["note_id", "id"])) || "";
-      if (!noteId) continue;
-      // Try to remove uploaded file if it points to our public/note_imgs
-      try {
-        const img = n.image_url || n.image || n.file_url || n.file || n.attachment_url || n.attachment;
-        if (img && typeof img === "string") {
-          let s = String(img);
-          // Accept various forms and normalize to /note_imgs/... relative path
-          if (/^https?:\/\//i.test(s)) {
-            // if it contains /media/note_imgs/, map to /note_imgs/
-            const m = s.match(/\/media\/note_imgs\/(.+)$/i);
-            if (m) {
-              s = `/note_imgs/${m[1]}`;
-            } else {
-              s = ""; // external file not managed locally
-            }
-          } else if (s.startsWith("/api/backend")) {
-            const idx = s.indexOf("note_imgs");
-            s = idx !== -1 ? `/${s.slice(idx)}` : "";
-          } else if (!s.includes("note_imgs")) {
-            s = "";
-          } else if (!s.startsWith("/")) {
-            s = `/${s}`;
-          }
-          if (s && s.startsWith("/note_imgs/")) {
-            // Call our uploads DELETE endpoint
-            await fetch(`/api/uploads?path=${encodeURIComponent(s)}`, { method: "DELETE" });
-          }
-        }
-      } catch (delFileErr) {
-        console.warn("Could not remove local upload for note", noteId, delFileErr);
-      }
-      // Now delete note in backend
-      try {
-        await api.delete(`/notes/${noteId}`, { validateStatus: () => true });
-      } catch (e) {
-        console.warn(`Error deleting note ${noteId} in topic ${topicId}`, e);
-      }
-    }
-
-    // 3) Delete topic itself
-    await api.delete(`/topics/${topicId}`);
-  };
-
   // Function to delete a topic
   const handleDeleteTopic = async (topicId: string) => {
     setConfirmCfg({
@@ -1192,13 +1087,12 @@ export default function OrganizationPage() {
       message: "Czy na pewno chcesz usunąć temat?",
       onConfirm: async () => {
         try {
-          // Find affected channel first (for UI updates)
+          await api.delete(`/topics/${topicId}`);
+          // Determine which channel contained this topic
           const entry = Object.entries(channelTopics).find(([, topics]) =>
             topics.some((t) => t.id === topicId)
           );
           const affectedChannelId = entry?.[0];
-          // Perform cascade delete: remove notes, then topic
-          await deleteTopicCascade(topicId);
           if (affectedChannelId) {
             // Reload only that channel's topics
             await loadTopicsForChannel(affectedChannelId);

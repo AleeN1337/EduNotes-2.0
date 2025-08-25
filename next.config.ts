@@ -2,6 +2,10 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   /* config options here */
+  serverExternalPackages: [],
+  experimental: {
+    // Experimental features if needed
+  },
   // Wyłączone rewrites - używamy proxy serwera zamiast bezpośrednich przekierowań
   // async rewrites() {
   //   return [
