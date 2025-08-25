@@ -134,6 +134,68 @@ export default function ChatArea(props: ChatAreaProps) {
     }
   }, []);
 
+  // Cache avatarów: userId -> url; wczytaj z localStorage i zapisuj zmiany
+  const [avatarMap, setAvatarMap] = React.useState<Record<string, string>>({});
+  React.useEffect(() => {
+    try {
+      const raw = localStorage.getItem("avatar_map_v1");
+      if (raw) setAvatarMap(JSON.parse(raw));
+    } catch {}
+  }, []);
+  React.useEffect(() => {
+    try {
+      localStorage.setItem("avatar_map_v1", JSON.stringify(avatarMap));
+    } catch {}
+  }, [avatarMap]);
+
+  // Upewnij się, że własny avatar jest w mapie (pozwala innym komponentom i temu widokowi korzystać z cache)
+  React.useEffect(() => {
+    if (!myId || !myAvatar) return;
+    const key = String(myId);
+    const resolved = resolveAssetUrl(myAvatar) || myAvatar;
+    setAvatarMap((prev) => (prev[key] ? prev : { ...prev, [key]: resolved }));
+  }, [myId, myAvatar]);
+
+  // Preload avatarów autorów wiadomości z /users/{id}
+  React.useEffect(() => {
+    const uniqueIds = new Set<string>();
+    for (const m of messages) {
+      const me = m as MessageExtended;
+      const uid = String(me.user?.id ?? me.user_id ?? "");
+      if (uid) uniqueIds.add(uid);
+    }
+    const toFetch = Array.from(uniqueIds).filter(
+      (uid) => !avatarMap[uid] && uid !== (myId || "")
+    );
+    if (!toFetch.length) return;
+    (async () => {
+      try {
+        const results = await Promise.all(
+          toFetch.map(async (uid) => {
+            try {
+              const res = await api.get(`/users/${uid}`);
+              const envelope = res.data;
+              const data = envelope?.data ?? envelope;
+              const avatarPath = data?.avatar_url || data?.avatar || null;
+              if (avatarPath) {
+                const url = resolveAssetUrl(avatarPath) || String(avatarPath);
+                return { uid, url } as const;
+              }
+            } catch {}
+            return null;
+          })
+        );
+        const additions: Record<string, string> = {};
+        for (const r of results) {
+          if (r && r.url) additions[r.uid] = r.url;
+        }
+        if (Object.keys(additions).length) {
+          setAvatarMap((prev) => ({ ...prev, ...additions }));
+        }
+      } catch {}
+    })();
+  }, [messages, avatarMap, myId]);
+
   // Dev-only debug logging: enable by setting localStorage.setItem('chat_debug','1')
   React.useEffect(() => {
     try {
@@ -208,25 +270,19 @@ export default function ChatArea(props: ChatAreaProps) {
   const getDisplayedLikes = (msg: Message) => {
     const base = typeof msg.likes === "number" ? msg.likes : 0;
     const currentLiked = !!messageRatings[msg.id]?.liked;
-    const isPending = !!pendingRatings[msg.id];
-    if (!isPending) return base;
-    const prev =
-      confirmedRatings[msg.id] || initialRatingsRef.current[msg.id] || {};
-    const prevLiked = !!(prev as any).liked;
-    const delta = (currentLiked ? 1 : 0) - (prevLiked ? 1 : 0);
+    const baseline = initialRatingsRef.current[msg.id] || {};
+    const baselineLiked = !!(baseline as any).liked;
+    const delta = (currentLiked ? 1 : 0) - (baselineLiked ? 1 : 0);
     const res = base + delta;
     return res < 0 ? 0 : res;
   };
 
   const getDisplayedDislikes = (msg: Message) => {
     const base = typeof msg.dislikes === "number" ? msg.dislikes : 0;
-    const current = !!messageRatings[msg.id]?.disliked;
-    const isPending = !!pendingRatings[msg.id];
-    if (!isPending) return base;
-    const prev =
-      confirmedRatings[msg.id] || initialRatingsRef.current[msg.id] || {};
-    const prevDis = !!(prev as any).disliked;
-    const delta = (current ? 1 : 0) - (prevDis ? 1 : 0);
+    const currentDisliked = !!messageRatings[msg.id]?.disliked;
+    const baseline = initialRatingsRef.current[msg.id] || {};
+    const baselineDisliked = !!(baseline as any).disliked;
+    const delta = (currentDisliked ? 1 : 0) - (baselineDisliked ? 1 : 0);
     const res = base + delta;
     return res < 0 ? 0 : res;
   };
@@ -495,48 +551,50 @@ export default function ChatArea(props: ChatAreaProps) {
   // desired: 'like' | 'dislike' | 'none'
   const sendReaction = async (
     noteId: string,
-    desired: "like" | "dislike" | "none"
+    desired: "like" | "dislike" | "none",
+    prevKind?: "like" | "dislike" | null
   ) => {
+    // Helper: detect backend "already reacted" error that we can treat as success
+    const isAlreadyErr = (err: any) => {
+      const status = err?.response?.status;
+      const detail = (err?.response?.data?.detail || "")
+        .toString()
+        .toLowerCase();
+      return (
+        status === 400 &&
+        (detail.includes("already like") ||
+          detail.includes("already dislike") ||
+          detail.includes("already"))
+      );
+    };
+
     if (desired === "like") {
-      return api.post(`/notes/give_like`, null, {
+      const res = await api.post(`/notes/give_like`, null, {
         params: { note_id: noteId },
+        validateStatus: () => true, // prevent global error logging
       });
+      const detail = (res?.data?.detail || "").toString().toLowerCase();
+      if (res.status >= 200 && res.status < 300) return res;
+      if (res.status === 400 && (detail.includes("already like") || detail.includes("already dislike") || detail.includes("already"))) {
+        return { data: { ok: true } } as any;
+      }
+      throw Object.assign(new Error("Like request failed"), { response: { status: res.status, data: res.data } });
     }
     if (desired === "dislike") {
-      return api.post(`/notes/give_dislike`, null, {
+      const res = await api.post(`/notes/give_dislike`, null, {
         params: { note_id: noteId },
+        validateStatus: () => true, // prevent global error logging
       });
-    }
-    // Try neutralizing reaction. Backend may or may not support this endpoint.
-    // We attempt a few conventional shapes; if all fail, throw last error.
-    let lastErr: any = null;
-    const attempts: Array<{
-      path: string;
-      params?: Record<string, any>;
-      body?: any;
-      method?: "POST" | "PUT" | "DELETE";
-    }> = [
-      { path: "/notes/remove_reaction", params: { note_id: noteId } },
-      { path: "/notes/react", params: { note_id: noteId, type: "none" } },
-      { path: "/notes/react/none", params: { note_id: noteId } },
-    ];
-    for (const a of attempts) {
-      try {
-        const method = a.method || "POST";
-        if (method === "POST")
-          return await api.post(a.path, a.body ?? null, { params: a.params });
-        if (method === "PUT")
-          return await api.put(a.path, a.body ?? null, { params: a.params });
-        if (method === "DELETE")
-          return await api.delete(a.path, { params: a.params });
-      } catch (e: any) {
-        lastErr = e;
-        // Continue trying next variant if 404/405; break early on 401/500 to avoid noise
-        const code = e?.response?.status;
-        if (code && code >= 500) break;
+      const detail = (res?.data?.detail || "").toString().toLowerCase();
+      if (res.status >= 200 && res.status < 300) return res;
+      if (res.status === 400 && (detail.includes("already like") || detail.includes("already dislike") || detail.includes("already"))) {
+        return { data: { ok: true } } as any;
       }
+      throw Object.assign(new Error("Dislike request failed"), { response: { status: res.status, data: res.data } });
     }
-    throw lastErr || new Error("Reaction removal not supported by backend");
+    // Neutralize (toggle off): backend has no endpoint — do this client-only.
+    // We don't call the server to avoid 405/400 noise and keep FB-like UX.
+    return { data: { ok: true } } as any;
   };
 
   // Preview for locally selected file (before it's uploaded)
@@ -736,16 +794,23 @@ export default function ChatArea(props: ChatAreaProps) {
                   >
                     {/* In-bubble avatar at bottom-left */}
                     <Avatar
-                      src={resolveAssetUrl(
-                        (me.user &&
-                          (me.user.avatar_url ||
-                            (me.user as { avatar?: string }).avatar)) ||
-                          me.avatar_url ||
-                          (me as MessageExtended & { avatar?: string })
-                            .avatar ||
-                          (isMessageFromMe(msg) ? myAvatar : undefined) ||
-                          undefined
-                      )}
+                      src={
+                        resolveAssetUrl(
+                          (me.user &&
+                            (me.user.avatar_url ||
+                              (me.user as { avatar?: string }).avatar)) ||
+                            me.avatar_url ||
+                            (me as MessageExtended & { avatar?: string })
+                              .avatar ||
+                            undefined
+                        ) ||
+                        avatarMap[
+                          String(me.user?.id ?? me.user_id ?? me.id ?? "")
+                        ] ||
+                        (isMessageFromMe(msg)
+                          ? resolveAssetUrl(myAvatar || undefined) || undefined
+                          : undefined)
+                      }
                       sx={{
                         width: 28,
                         height: 28,
@@ -826,6 +891,53 @@ export default function ChatArea(props: ChatAreaProps) {
                         {msg.content}
                       </Typography>
                     ) : null}
+                    {/* In-bubble like/dislike counters (top-right) */}
+                    {(() => {
+                      const likeCount = getDisplayedLikes(msg);
+                      const dislikeCount = getDisplayedDislikes(msg);
+                      const localReacted = !!messageRatings[msg.id]?.liked || !!messageRatings[msg.id]?.disliked;
+                      if (!(likeCount > 0 || dislikeCount > 0 || localReacted)) return null;
+                      return (
+                        <Box
+                          sx={{
+                            position: "absolute",
+                            top: 6,
+                            right: 6,
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 0.75,
+                            backgroundColor: "#eceff1",
+                            borderRadius: 999,
+                            px: 1,
+                            py: 0.25,
+                            color: "#546e7a",
+                            fontSize: 12,
+                            boxShadow: "0 1px 2px rgba(0,0,0,0.08)",
+                          }}
+                        >
+                          {likeCount > 0 && (
+                            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                              <ThumbUpIcon sx={{ fontSize: 14, color: "#1565c0" }} />
+                              <Typography variant="caption" sx={{ lineHeight: 1 }}>
+                                {likeCount}
+                              </Typography>
+                            </Box>
+                          )}
+                          {dislikeCount > 0 && (
+                            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                              <ThumbDownIcon sx={{ fontSize: 14, color: "#c62828" }} />
+                              <Typography variant="caption" sx={{ lineHeight: 1 }}>
+                                {dislikeCount}
+                              </Typography>
+                            </Box>
+                          )}
+                          {/* When the user just reacted but counts are 0, show a dot for instant feedback */}
+                          {likeCount === 0 && dislikeCount === 0 && localReacted && (
+                            <Box sx={{ width: 6, height: 6, borderRadius: 999, backgroundColor: "#90a4ae" }} />
+                          )}
+                        </Box>
+                      );
+                    })()}
                     {/* Hidden timestamp under the bubble, shows on hover */}
                     <Typography
                       className="message-timestamp"
@@ -845,56 +957,7 @@ export default function ChatArea(props: ChatAreaProps) {
                       {new Date(msg.created_at).toLocaleTimeString()}
                     </Typography>
                   </Box>
-                  {/* Always-visible like/dislike counters next to the bubble */}
-                  {(getDisplayedLikes(msg) > 0 ||
-                    getDisplayedDislikes(msg) > 0) && (
-                    <Box
-                      sx={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 0.75,
-                        backgroundColor: "#eceff1",
-                        borderRadius: 999,
-                        px: 1,
-                        py: 0.25,
-                        color: "#546e7a",
-                        fontSize: 12,
-                      }}
-                    >
-                      {getDisplayedLikes(msg) > 0 && (
-                        <Box
-                          sx={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 0.5,
-                          }}
-                        >
-                          <ThumbUpIcon
-                            sx={{ fontSize: 14, color: "#1565c0" }}
-                          />
-                          <Typography variant="caption" sx={{ lineHeight: 1 }}>
-                            {getDisplayedLikes(msg)}
-                          </Typography>
-                        </Box>
-                      )}
-                      {getDisplayedDislikes(msg) > 0 && (
-                        <Box
-                          sx={{
-                            display: "flex",
-                            alignItems: "center",
-                            gap: 0.5,
-                          }}
-                        >
-                          <ThumbDownIcon
-                            sx={{ fontSize: 14, color: "#c62828" }}
-                          />
-                          <Typography variant="caption" sx={{ lineHeight: 1 }}>
-                            {getDisplayedDislikes(msg)}
-                          </Typography>
-                        </Box>
-                      )}
-                    </Box>
-                  )}
+                  {/* Counters moved inside the bubble for better visibility */}
                   {/* No side action stacks; plus menu instead */}
                   <IconButton
                     size="small"
@@ -1043,26 +1106,27 @@ export default function ChatArea(props: ChatAreaProps) {
             const id = String(menuMsg.id);
             if (pendingRef.current[id]) return;
 
-            const confirmed =
-              confirmedRatings[id] || initialRatingsRef.current[id] || {};
-            const alreadyConfirmed = !!(confirmed as any).liked;
             const likedLocal = !!messageRatings[id]?.liked;
             const dislikedLocal = !!messageRatings[id]?.disliked;
 
-            // Determine desired target per FB rules
-            // - If currently liked (confirmed+local), clicking Like again => none (remove)
-            // - If currently disliked, clicking Like => like (switch)
-            // - Otherwise => like
-            const desired: "like" | "none" =
-              alreadyConfirmed && likedLocal ? "none" : "like";
+            // Decide only from local state to avoid unknown server baseline
+            const desired: "like" | "none" = likedLocal ? "none" : "like";
+            const prevKind: "like" | "dislike" | null = likedLocal
+              ? "like"
+              : dislikedLocal
+              ? "dislike"
+              : null;
+
+            // Close menu first to prevent aria-hidden focus warnings
+            closeMenu();
 
             // mark pending
             pendingRef.current[id] = true;
             setPendingRatings((p) => ({ ...p, [id]: true }));
 
             const prevState = messageRatings[id] || {
-              liked: !!alreadyConfirmed,
-              disliked: !!(confirmed as any).disliked,
+              liked: false,
+              disliked: false,
             };
 
             // optimistic update
@@ -1080,7 +1144,7 @@ export default function ChatArea(props: ChatAreaProps) {
               return next;
             });
             try {
-              await sendReaction(id, desired);
+              await sendReaction(id, desired, prevKind);
               setConfirmedRatings((c) => ({
                 ...c,
                 [id]:
@@ -1088,20 +1152,14 @@ export default function ChatArea(props: ChatAreaProps) {
                     ? { liked: true, disliked: false }
                     : { liked: false, disliked: false },
               }));
-              try {
-                if (typeof props.onRefresh === "function")
+              // Immediately fetch fresh counts from server if parent provided a refresh
+              if (typeof props.onRefresh === "function") {
+                try {
                   await props.onRefresh();
-              } catch {}
-            } catch (err: any) {
-              // If backend does not support removal, rollback and if switching was intended, try like instead
-              const status = err?.response?.status;
-              if (desired === "none" && (status === 404 || status === 405)) {
-                console.warn(
-                  "Reaction removal not supported by backend; keeping previous state"
-                );
-              } else {
-                console.warn("Like action failed; rolling back", err);
+                } catch {}
               }
+            } catch (err: any) {
+              console.warn("Like action failed; rolling back", err);
               setMessageRatings((prev) => {
                 const next = { ...prev, [id]: prevState };
                 try {
@@ -1117,7 +1175,6 @@ export default function ChatArea(props: ChatAreaProps) {
                 return copy;
               });
             }
-            closeMenu();
           }}
         >
           <ThumbUpIcon
@@ -1138,22 +1195,27 @@ export default function ChatArea(props: ChatAreaProps) {
             const id = String(menuMsg.id);
             if (pendingRef.current[id]) return;
 
-            const confirmed =
-              confirmedRatings[id] || initialRatingsRef.current[id] || {};
-            const alreadyConfirmed = !!(confirmed as any).disliked;
             const likedLocal = !!messageRatings[id]?.liked;
             const dislikedLocal = !!messageRatings[id]?.disliked;
 
-            // Determine desired target per FB rules
-            const desired: "dislike" | "none" =
-              alreadyConfirmed && dislikedLocal ? "none" : "dislike";
+            const desired: "dislike" | "none" = dislikedLocal
+              ? "none"
+              : "dislike";
+            const prevKind: "like" | "dislike" | null = dislikedLocal
+              ? "dislike"
+              : likedLocal
+              ? "like"
+              : null;
+
+            // Close menu first to prevent aria-hidden focus warnings
+            closeMenu();
 
             pendingRef.current[id] = true;
             setPendingRatings((p) => ({ ...p, [id]: true }));
 
             const prevState = messageRatings[id] || {
-              liked: !!(confirmed as any).liked,
-              disliked: !!alreadyConfirmed,
+              liked: false,
+              disliked: false,
             };
 
             setMessageRatings((prev) => {
@@ -1170,7 +1232,7 @@ export default function ChatArea(props: ChatAreaProps) {
               return next;
             });
             try {
-              await sendReaction(id, desired);
+              await sendReaction(id, desired, prevKind);
               setConfirmedRatings((c) => ({
                 ...c,
                 [id]:
@@ -1178,19 +1240,13 @@ export default function ChatArea(props: ChatAreaProps) {
                     ? { liked: false, disliked: true }
                     : { liked: false, disliked: false },
               }));
-              try {
-                if (typeof props.onRefresh === "function")
+              if (typeof props.onRefresh === "function") {
+                try {
                   await props.onRefresh();
-              } catch {}
-            } catch (err: any) {
-              const status = err?.response?.status;
-              if (desired === "none" && (status === 404 || status === 405)) {
-                console.warn(
-                  "Reaction removal not supported by backend; keeping previous state"
-                );
-              } else {
-                console.warn("Dislike action failed; rolling back", err);
+                } catch {}
               }
+            } catch (err: any) {
+              console.warn("Dislike action failed; rolling back", err);
               setMessageRatings((prev) => {
                 const next = { ...prev, [id]: prevState };
                 try {
@@ -1206,7 +1262,6 @@ export default function ChatArea(props: ChatAreaProps) {
                 return copy;
               });
             }
-            closeMenu();
           }}
         >
           <ThumbDownIcon
