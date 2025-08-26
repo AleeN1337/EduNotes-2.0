@@ -9,11 +9,14 @@ const api = axios.create({
 // Request interceptor for adding auth tokens
 api.interceptors.request.use(
   (config) => {
-    console.log("API Request interceptor - URL:", config.url);
-    console.log("API Request interceptor - Method:", config.method);
-    console.log("API Request interceptor - BaseURL:", config.baseURL);
-    console.log("API Request interceptor - Data:", config.data);
-    console.log("API Request interceptor - Data type:", typeof config.data);
+    const debug = process.env.NEXT_PUBLIC_API_DEBUG === "1";
+    if (debug) {
+      console.log("API Request interceptor - URL:", config.url);
+      console.log("API Request interceptor - Method:", config.method);
+      console.log("API Request interceptor - BaseURL:", config.baseURL);
+      console.log("API Request interceptor - Data:", config.data);
+      console.log("API Request interceptor - Data type:", typeof config.data);
+    }
 
     // Add auth token only in the browser
     if (typeof window !== "undefined") {
@@ -21,11 +24,11 @@ api.interceptors.request.use(
       if (token) {
         config.headers = config.headers || {};
         (config.headers as any).Authorization = `Bearer ${token}`;
-        console.log("API Request - token attached");
+        if (debug) console.log("API Request - token attached");
       }
     }
-
-    console.log("API Request interceptor - Final headers:", config.headers);
+    if (debug)
+      console.log("API Request interceptor - Final headers:", config.headers);
     return config;
   },
   (error) => {
@@ -41,6 +44,7 @@ api.interceptors.response.use(
   },
   (error) => {
     // Szczegółowe logowanie błędów 404
+    const debug = process.env.NEXT_PUBLIC_API_DEBUG === "1";
     if (error.response?.status === 404) {
       const url = error.config?.url;
 
@@ -60,16 +64,17 @@ api.interceptors.response.use(
       ];
 
       if (expected404Endpoints.some((endpoint) => url?.includes(endpoint))) {
-        console.log(
-          `Expected 404 for ${url} - user has no data for this endpoint`
-        );
+        if (debug)
+          console.log(
+            `Expected 404 for ${url} - user has no data for this endpoint`
+          );
       } else {
-        console.error("Unexpected 404 Error Details:");
-        console.error("- URL:", url);
-        console.error("- Method:", error.config?.method);
-        console.error("- Base URL:", error.config?.baseURL);
-        console.error("- Full URL:", `${error.config?.baseURL}${url}`);
-        console.error("- Response data:", error.response?.data);
+        console.error("Unexpected 404 Error:", {
+          url,
+          method: error.config?.method,
+          baseURL: error.config?.baseURL,
+          status: error.response?.status,
+        });
       }
     } else {
       // Inne błędy loguj normalnie — dopiszemy też body odpowiedzi aby złapać 500
@@ -80,11 +85,13 @@ api.interceptors.response.use(
         message: error.message,
       });
       // Dodatkowe szczegóły odpowiedzi (body + headers) — bardzo pomocne przy 500
-      try {
-        console.error("API Response data:", error.response?.data);
-        console.error("API Response headers:", error.response?.headers);
-      } catch (logErr) {
-        console.error("Failed to log API response details:", logErr);
+      if (debug) {
+        try {
+          console.error("API Response data:", error.response?.data);
+          console.error("API Response headers:", error.response?.headers);
+        } catch (logErr) {
+          console.error("Failed to log API response details:", logErr);
+        }
       }
     }
 

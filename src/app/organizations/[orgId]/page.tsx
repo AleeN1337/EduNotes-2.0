@@ -762,6 +762,17 @@ export default function OrganizationPage() {
     return mapped;
   }
 
+  // Stable refresher for messages in current topic (used after reactions)
+  const refreshMessages = React.useCallback(async () => {
+    if (!selectedTopic) return;
+    try {
+      const latest = await fetchMessagesForTopic(selectedTopic);
+      setMessages(latest);
+    } catch (e) {
+      console.warn("Refresh messages failed:", e);
+    }
+  }, [selectedTopic]);
+
   // Load messages when topic selected
   useEffect(() => {
     if (selectedTopic) {
@@ -1668,6 +1679,7 @@ export default function OrganizationPage() {
                 setMessageRatings={setMessageRatings}
                 ratingsKey={ratingsKey}
                 topicId={selectedTopic}
+                onRefresh={refreshMessages}
               />
             </Box>
           </Box>

@@ -29,6 +29,7 @@ import ThumbDownIcon from "@mui/icons-material/ThumbDown";
 import AddIcon from "@mui/icons-material/Add";
 import { Message } from "./types";
 import api from "@/lib/api";
+import { MEDIA_BASE, buildImageProxyUrl } from "@/lib/config";
 
 /* eslint-disable @next/next/no-img-element */
 
@@ -267,6 +268,22 @@ export default function ChatArea(props: ChatAreaProps) {
     initialCapturedRef.current = true;
   }, [ratingsKey]);
 
+  // Seed baseline with any known current props (messageRatings) for ids not yet captured.
+  React.useEffect(() => {
+    if (!messageRatings) return;
+    const base = initialRatingsRef.current;
+    let changed = false;
+    for (const [id, state] of Object.entries(messageRatings)) {
+      if (!base[id]) {
+        base[id] = { liked: !!state?.liked, disliked: !!state?.disliked };
+        changed = true;
+      }
+    }
+    if (changed) {
+      initialRatingsRef.current = { ...base };
+    }
+  }, [messageRatings]);
+
   const getDisplayedLikes = (msg: Message) => {
     const base = typeof msg.likes === "number" ? msg.likes : 0;
     const currentLiked = !!messageRatings[msg.id]?.liked;
@@ -317,9 +334,9 @@ export default function ChatArea(props: ChatAreaProps) {
         // Ensure leading slash
         if (!suffix.startsWith("/")) suffix = `/${suffix}`;
         // Use our Next.js image proxy to handle CORS and Content-Type issues
-        return `/api/image-proxy?url=${encodeURIComponent(
-          `http://localhost:8000/media/note_imgs${suffix}`
-        )}`;
+        return buildImageProxyUrl(
+          `${MEDIA_BASE.replace(/\/$/, "")}/media/note_imgs${suffix}`
+        );
       };
 
       // If the backend returns an /api/backend path that contains note_imgs,
@@ -338,9 +355,9 @@ export default function ChatArea(props: ChatAreaProps) {
             idxA !== -1 ? tail.slice(idxA + "avatars".length) : tail;
           let sfx = suffixA;
           if (!sfx.startsWith("/")) sfx = `/${sfx}`;
-          return `/api/image-proxy?url=${encodeURIComponent(
-            `http://localhost:8000/media/avatars${sfx}`
-          )}`;
+          return buildImageProxyUrl(
+            `${MEDIA_BASE.replace(/\/$/, "")}/media/avatars${sfx}`
+          );
         }
         return s;
       }
@@ -357,9 +374,9 @@ export default function ChatArea(props: ChatAreaProps) {
         const idx = s.indexOf("avatars");
         let suffix = idx !== -1 ? s.slice(idx + "avatars".length) : s;
         if (!suffix.startsWith("/")) suffix = `/${suffix}`;
-        return `/api/image-proxy?url=${encodeURIComponent(
-          `http://localhost:8000/media/avatars${suffix}`
-        )}`;
+        return buildImageProxyUrl(
+          `${MEDIA_BASE.replace(/\/$/, "")}/media/avatars${suffix}`
+        );
       }
 
       // Otherwise map to backend proxy endpoint as before
@@ -568,6 +585,7 @@ export default function ChatArea(props: ChatAreaProps) {
       );
     };
 
+    const ignore400 = process.env.NEXT_PUBLIC_IGNORE_REACTION_400 === "1";
     if (desired === "like") {
       const res = await api.post(`/notes/give_like`, null, {
         params: { note_id: noteId },
@@ -575,10 +593,21 @@ export default function ChatArea(props: ChatAreaProps) {
       });
       const detail = (res?.data?.detail || "").toString().toLowerCase();
       if (res.status >= 200 && res.status < 300) return res;
-      if (res.status === 400 && (detail.includes("already like") || detail.includes("already dislike") || detail.includes("already"))) {
+      if (
+        res.status === 400 &&
+        (detail.includes("already like") ||
+          detail.includes("already dislike") ||
+          detail.includes("already"))
+      ) {
         return { data: { ok: true } } as any;
       }
-      throw Object.assign(new Error("Like request failed"), { response: { status: res.status, data: res.data } });
+      // Optionally ignore any 400 in dev if feature flag is set
+      if (res.status === 400 && ignore400) {
+        return { data: { ok: true } } as any;
+      }
+      throw Object.assign(new Error("Like request failed"), {
+        response: { status: res.status, data: res.data },
+      });
     }
     if (desired === "dislike") {
       const res = await api.post(`/notes/give_dislike`, null, {
@@ -587,10 +616,21 @@ export default function ChatArea(props: ChatAreaProps) {
       });
       const detail = (res?.data?.detail || "").toString().toLowerCase();
       if (res.status >= 200 && res.status < 300) return res;
-      if (res.status === 400 && (detail.includes("already like") || detail.includes("already dislike") || detail.includes("already"))) {
+      if (
+        res.status === 400 &&
+        (detail.includes("already like") ||
+          detail.includes("already dislike") ||
+          detail.includes("already"))
+      ) {
         return { data: { ok: true } } as any;
       }
-      throw Object.assign(new Error("Dislike request failed"), { response: { status: res.status, data: res.data } });
+      // Optionally ignore any 400 in dev if feature flag is set
+      if (res.status === 400 && ignore400) {
+        return { data: { ok: true } } as any;
+      }
+      throw Object.assign(new Error("Dislike request failed"), {
+        response: { status: res.status, data: res.data },
+      });
     }
     // Neutralize (toggle off): backend has no endpoint — do this client-only.
     // We don't call the server to avoid 405/400 noise and keep FB-like UX.
@@ -764,34 +804,34 @@ export default function ChatArea(props: ChatAreaProps) {
                     },
                   }}
                 >
-                  {/* Avatar moved inside bubble (bottom-left). No external avatar here. */}
-                  {/* Actions hidden under plus menu */}
-                  <Box
-                    sx={{
-                      p: 2,
-                      pl: 6, // make room for avatar inside bubble (left)
-                      pb: 5, // make room for avatar inside bubble (bottom)
-                      position: "relative",
-                      maxWidth: "70%",
-                      width: "auto",
-                      // determine canonical author id for consistent coloring/initials
-                      backgroundColor: getColorForUser(
-                        String(me.user?.id ?? me.user_id ?? me.id ?? "")
-                      ),
-                      color: "#2c3e50",
-                      borderRadius: isOwn
-                        ? "18px 18px 4px 18px"
-                        : "18px 18px 18px 4px",
-                      whiteSpace: "pre-wrap",
-                      wordBreak: "break-word",
-                      boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
-                      // reveal timestamp only when hovering the bubble
-                      "&:hover .message-timestamp": {
-                        opacity: 1,
-                        transform: "translateY(0px)",
-                      },
-                    }}
-                  >
+                  {/* Wrap bubble + reactions vertically to prevent overlap */}
+                  <Box sx={{ display: "flex", flexDirection: "column", maxWidth: "70%" }}>
+                    {/* Message bubble */}
+                    <Box
+                      sx={{
+                        p: 2,
+                        pl: 6, // make room for avatar inside bubble (left)
+                        pb: 5, // make room for avatar inside bubble (bottom)
+                        position: "relative",
+                        width: "auto",
+                        // determine canonical author id for consistent coloring/initials
+                        backgroundColor: getColorForUser(
+                          String(me.user?.id ?? me.user_id ?? me.id ?? "")
+                        ),
+                        color: "#2c3e50",
+                        borderRadius: isOwn
+                          ? "18px 18px 4px 18px"
+                          : "18px 18px 18px 4px",
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                        boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
+                        // reveal timestamp only when hovering the bubble
+                        "&:hover .message-timestamp": {
+                          opacity: 1,
+                          transform: "translateY(0px)",
+                        },
+                      }}
+                    >
                     {/* In-bubble avatar at bottom-left */}
                     <Avatar
                       src={
@@ -891,53 +931,6 @@ export default function ChatArea(props: ChatAreaProps) {
                         {msg.content}
                       </Typography>
                     ) : null}
-                    {/* In-bubble like/dislike counters (top-right) */}
-                    {(() => {
-                      const likeCount = getDisplayedLikes(msg);
-                      const dislikeCount = getDisplayedDislikes(msg);
-                      const localReacted = !!messageRatings[msg.id]?.liked || !!messageRatings[msg.id]?.disliked;
-                      if (!(likeCount > 0 || dislikeCount > 0 || localReacted)) return null;
-                      return (
-                        <Box
-                          sx={{
-                            position: "absolute",
-                            top: 6,
-                            right: 6,
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 0.75,
-                            backgroundColor: "#eceff1",
-                            borderRadius: 999,
-                            px: 1,
-                            py: 0.25,
-                            color: "#546e7a",
-                            fontSize: 12,
-                            boxShadow: "0 1px 2px rgba(0,0,0,0.08)",
-                          }}
-                        >
-                          {likeCount > 0 && (
-                            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                              <ThumbUpIcon sx={{ fontSize: 14, color: "#1565c0" }} />
-                              <Typography variant="caption" sx={{ lineHeight: 1 }}>
-                                {likeCount}
-                              </Typography>
-                            </Box>
-                          )}
-                          {dislikeCount > 0 && (
-                            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                              <ThumbDownIcon sx={{ fontSize: 14, color: "#c62828" }} />
-                              <Typography variant="caption" sx={{ lineHeight: 1 }}>
-                                {dislikeCount}
-                              </Typography>
-                            </Box>
-                          )}
-                          {/* When the user just reacted but counts are 0, show a dot for instant feedback */}
-                          {likeCount === 0 && dislikeCount === 0 && localReacted && (
-                            <Box sx={{ width: 6, height: 6, borderRadius: 999, backgroundColor: "#90a4ae" }} />
-                          )}
-                        </Box>
-                      );
-                    })()}
                     {/* Hidden timestamp under the bubble, shows on hover */}
                     <Typography
                       className="message-timestamp"
@@ -956,13 +949,57 @@ export default function ChatArea(props: ChatAreaProps) {
                     >
                       {new Date(msg.created_at).toLocaleTimeString()}
                     </Typography>
+                    </Box>
+
+                    {/* Reactions below the bubble so they don't obscure text */}
+                    {(() => {
+                      const likeCount = getDisplayedLikes(msg);
+                      const dislikeCount = getDisplayedDislikes(msg);
+                      if (!(likeCount > 0 || dislikeCount > 0)) return null;
+                      return (
+                        <Box
+                          data-testid="message-reactions"
+                          sx={{
+                            mt: 0.5,
+                            alignSelf: isOwn ? "flex-end" : "flex-start",
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 0.75,
+                            backgroundColor: "#eceff1",
+                            borderRadius: 999,
+                            px: 1,
+                            py: 0.25,
+                            color: "#546e7a",
+                            fontSize: 12,
+                            boxShadow: "0 1px 2px rgba(0,0,0,0.08)",
+                          }}
+                        >
+                          {likeCount > 0 && (
+                            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                              <ThumbUpIcon sx={{ fontSize: 14, color: "#1565c0" }} />
+                              <Typography variant="caption" sx={{ lineHeight: 1 }} data-testid="like-count">
+                                {likeCount}
+                              </Typography>
+                            </Box>
+                          )}
+                          {dislikeCount > 0 && (
+                            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+                              <ThumbDownIcon sx={{ fontSize: 14, color: "#c62828" }} />
+                              <Typography variant="caption" sx={{ lineHeight: 1 }} data-testid="dislike-count">
+                                {dislikeCount}
+                              </Typography>
+                            </Box>
+                          )}
+                        </Box>
+                      );
+                    })()}
                   </Box>
-                  {/* Counters moved inside the bubble for better visibility */}
-                  {/* No side action stacks; plus menu instead */}
+                  {/* Plus menu trigger */}
                   <IconButton
                     size="small"
                     className="message-plus"
                     aria-label="Akcje wiadomości"
+                    data-testid="message-plus"
                     onClick={(e) => {
                       setMenuAnchor(e.currentTarget);
                       setMenuMsg(msg);
