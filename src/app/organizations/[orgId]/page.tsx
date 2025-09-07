@@ -1643,44 +1643,36 @@ export default function OrganizationPage() {
               display: "flex",
               flexDirection: "column",
               overflow: "hidden",
+              flex: 1,
+              minHeight: 0,
+              height: "100%",
             }}
           >
-            {/* Zadania przeniesione do TaskMenu w AppBar */}
-
-            {/* Main Chat Area */}
-            <Box
-              sx={{
-                display: "flex",
-                flexDirection: "column",
-                overflow: "hidden",
-              }}
-            >
-              <ChatArea
-                title={
-                  selectedTopic
-                    ? `${getCurrentChannelName()} - ${getCurrentTopicName()}`
-                    : "Czat (wybierz temat)"
-                }
-                messages={messages}
-                currentUserId={currentUserId}
-                currentUserEmail={currentUserEmail}
-                userColors={userColors}
-                getUserInitials={getUserInitials}
-                selectedFile={selectedFile}
-                onRemoveFile={() => setSelectedFile(null)}
-                newMessage={newMessage}
-                onChangeMessage={setNewMessage}
-                canSend={Boolean(selectedTopic)}
-                onSend={handleSendMessage}
-                onDeleteMessage={handleDeleteMessage}
-                onFileSelect={handleFileSelect}
-                messageRatings={messageRatings}
-                setMessageRatings={setMessageRatings}
-                ratingsKey={ratingsKey}
-                topicId={selectedTopic}
-                onRefresh={refreshMessages}
-              />
-            </Box>
+            <ChatArea
+              title={
+                selectedTopic
+                  ? `${getCurrentChannelName()} - ${getCurrentTopicName()}`
+                  : "Czat (wybierz temat)"
+              }
+              messages={messages}
+              currentUserId={currentUserId}
+              currentUserEmail={currentUserEmail}
+              userColors={userColors}
+              getUserInitials={getUserInitials}
+              selectedFile={selectedFile}
+              onRemoveFile={() => setSelectedFile(null)}
+              newMessage={newMessage}
+              onChangeMessage={setNewMessage}
+              canSend={Boolean(selectedTopic)}
+              onSend={handleSendMessage}
+              onDeleteMessage={handleDeleteMessage}
+              onFileSelect={handleFileSelect}
+              messageRatings={messageRatings}
+              setMessageRatings={setMessageRatings}
+              ratingsKey={ratingsKey}
+              topicId={selectedTopic}
+              onRefresh={refreshMessages}
+            />
           </Box>
         </Box>
       </Box>
