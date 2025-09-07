@@ -19,11 +19,15 @@ import {
   DialogTitle,
   DialogActions,
   Chip,
+  Tooltip,
 } from "@mui/material";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import SendIcon from "@mui/icons-material/Send";
 import DeleteIcon from "@mui/icons-material/Delete";
+import ThumbUpIcon from "@mui/icons-material/ThumbUp";
+import FavoriteIcon from "@mui/icons-material/Favorite";
+import FavoriteBorderIcon from "@mui/icons-material/FavoriteBorder";
 import { Message } from "./types";
 import api from "@/lib/api";
 import { MEDIA_BASE, buildImageProxyUrl } from "@/lib/config";
@@ -249,7 +253,16 @@ export default function ChatArea(props: ChatAreaProps) {
     return palette[idx];
   };
 
-  // Capture initial ratings - REMOVED for Messenger-like appearance
+  // Initialize likes from message data
+  React.useEffect(() => {
+    const likesMap: Record<string, { count: number; liked: boolean }> = {};
+    messages.forEach((msg) => {
+      const count = typeof msg.likes === "number" ? msg.likes : 0;
+      likesMap[String(msg.id)] = { count, liked: false };
+    });
+    setMessageLikes(likesMap);
+    setConfirmedLikes(likesMap);
+  }, [messages]);
 
   // Functions for displaying likes/dislikes - REMOVED for Messenger-like appearance
   const isImageLink = (url?: string) =>
@@ -336,7 +349,24 @@ export default function ChatArea(props: ChatAreaProps) {
   };
 
   // Plus menu state - REMOVED for Messenger-like appearance
-  // Track pending like/dislike requests per message - REMOVED for Messenger-like appearance
+  // Track pending like requests per message to avoid double submits
+  const [pendingLikes, setPendingLikes] = React.useState<
+    Record<string, boolean>
+  >({});
+  // ref mirror for immediate synchronous checks inside handlers
+  const pendingLikesRef = React.useRef<Record<string, boolean>>({});
+  // Store likes count for each message
+  const [messageLikes, setMessageLikes] = React.useState<
+    Record<string, { count: number; liked: boolean }>
+  >({});
+  // Store confirmed likes from server
+  const [confirmedLikes, setConfirmedLikes] = React.useState<
+    Record<string, { count: number; liked: boolean }>
+  >({});
+  // Store like animations
+  const [likeAnimations, setLikeAnimations] = React.useState<
+    Record<string, boolean>
+  >({});
   const closeMenu = () => {
     // Menu removed for Messenger-like appearance
   };
@@ -501,7 +531,91 @@ export default function ChatArea(props: ChatAreaProps) {
     }
   };
 
-  // Unified reaction sender - REMOVED for Messenger-like appearance
+  // Function to send like reaction to backend
+  const sendLike = async (noteId: string, isLiking: boolean) => {
+    const res = await api.post(`/notes/give_like`, null, {
+      params: { note_id: noteId },
+      validateStatus: () => true, // prevent global error logging
+    });
+
+    const detail = (res?.data?.detail || "").toString().toLowerCase();
+    if (res.status >= 200 && res.status < 300) return res;
+
+    // Handle "already liked" case
+    if (
+      res.status === 400 &&
+      (detail.includes("already like") || detail.includes("already"))
+    ) {
+      return { data: { ok: true } } as any;
+    }
+
+    throw Object.assign(new Error("Like request failed"), {
+      response: { status: res.status, data: res.data },
+    });
+  };
+
+  // Function to handle like/unlike action
+  const handleLike = async (messageId: string) => {
+    if (!myId) return;
+
+    const messageKey = String(messageId);
+    if (pendingLikesRef.current[messageKey]) return;
+
+    const currentLike = messageLikes[messageKey];
+    const isCurrentlyLiked = currentLike?.liked || false;
+    const newLikedState = !isCurrentlyLiked;
+
+    // Mark as pending
+    pendingLikesRef.current[messageKey] = true;
+    setPendingLikes((prev) => ({ ...prev, [messageKey]: true }));
+
+    // Add animation if liking
+    if (newLikedState) {
+      setLikeAnimations((prev) => ({ ...prev, [messageKey]: true }));
+      setTimeout(() => {
+        setLikeAnimations((prev) => ({ ...prev, [messageKey]: false }));
+      }, 600);
+    }
+
+    // Optimistic update
+    const newCount = isCurrentlyLiked
+      ? Math.max(0, (currentLike?.count || 0) - 1)
+      : (currentLike?.count || 0) + 1;
+
+    setMessageLikes((prev) => ({
+      ...prev,
+      [messageKey]: { count: newCount, liked: newLikedState },
+    }));
+
+    try {
+      await sendLike(messageKey, newLikedState);
+      setConfirmedLikes((prev) => ({
+        ...prev,
+        [messageKey]: { count: newCount, liked: newLikedState },
+      }));
+
+      // Refresh messages if parent provided refresh function
+      if (typeof props.onRefresh === "function") {
+        try {
+          await props.onRefresh();
+        } catch {}
+      }
+    } catch (err: any) {
+      console.warn("Like action failed; rolling back", err);
+      // Rollback on error
+      setMessageLikes((prev) => ({
+        ...prev,
+        [messageKey]: currentLike || { count: 0, liked: false },
+      }));
+    } finally {
+      pendingLikesRef.current[messageKey] = false;
+      setPendingLikes((prev) => {
+        const copy = { ...prev };
+        delete copy[messageKey];
+        return copy;
+      });
+    }
+  };
 
   // Preview for locally selected file (before it's uploaded)
   const [selectedFilePreview, setSelectedFilePreview] = React.useState<
@@ -664,6 +778,11 @@ export default function ChatArea(props: ChatAreaProps) {
                     alignItems: "flex-end",
                     mb: 2,
                     gap: 1,
+                    position: "relative",
+                    "&:hover .like-button": {
+                      opacity: 1,
+                      visibility: "visible",
+                    },
                   }}
                 >
                   {/* Avatar for other users (left side) */}
@@ -808,6 +927,115 @@ export default function ChatArea(props: ChatAreaProps) {
                         minute: "2-digit",
                       })}
                     </Typography>
+
+                    {/* Like button and counter */}
+                    {messageLikes[msg.id]?.liked ? (
+                      // Jeśli polubione - zawsze widoczne
+                      <Box
+                        sx={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 0.5,
+                          mt: 0.5,
+                          opacity: 1,
+                          visibility: "visible",
+                        }}
+                      >
+                        <Tooltip
+                          title={`Polubiło ${
+                            messageLikes[msg.id]?.count || 0
+                          } osób`}
+                        >
+                          <IconButton
+                            size="small"
+                            onClick={() => handleLike(msg.id)}
+                            disabled={pendingLikes[msg.id]}
+                            className={
+                              likeAnimations[msg.id] ? "like-animation" : ""
+                            }
+                            sx={{
+                              p: 0.5,
+                              color: "#e91e63",
+                              backgroundColor: "rgba(233, 30, 99, 0.1)",
+                              "&:hover": {
+                                backgroundColor: "rgba(233, 30, 99, 0.2)",
+                                transform: "scale(1.1)",
+                              },
+                              "&.Mui-disabled": {
+                                color: "#bdbdbd",
+                              },
+                              transition: "all 0.2s ease",
+                            }}
+                          >
+                            <FavoriteIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        {messageLikes[msg.id]?.count > 0 && (
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: "#e91e63",
+                              fontSize: "0.7rem",
+                              fontWeight: 500,
+                            }}
+                          >
+                            {messageLikes[msg.id].count}
+                          </Typography>
+                        )}
+                      </Box>
+                    ) : (
+                      // Jeśli nie polubione - widoczne tylko przy najechaniu
+                      <Box
+                        sx={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 0.5,
+                          mt: 0.5,
+                          opacity: messageLikes[msg.id]?.count > 0 ? 1 : 0,
+                          visibility:
+                            messageLikes[msg.id]?.count > 0
+                              ? "visible"
+                              : "hidden",
+                          transition: "opacity 0.2s ease, visibility 0.2s ease",
+                        }}
+                        className="like-button"
+                      >
+                        <Tooltip title="Polub tę wiadomość">
+                          <IconButton
+                            size="small"
+                            onClick={() => handleLike(msg.id)}
+                            disabled={pendingLikes[msg.id]}
+                            sx={{
+                              p: 0.5,
+                              color: "#757575",
+                              "&:hover": {
+                                backgroundColor: "rgba(233, 30, 99, 0.1)",
+                                color: "#e91e63",
+                                transform: "scale(1.1)",
+                              },
+                              "&.Mui-disabled": {
+                                color: "#bdbdbd",
+                              },
+                              transition: "all 0.2s ease",
+                            }}
+                          >
+                            <FavoriteBorderIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        {messageLikes[msg.id]?.count > 0 && (
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              color: "#757575",
+                              fontSize: "0.7rem",
+                              fontWeight: 500,
+                            }}
+                          >
+                            {messageLikes[msg.id].count}
+                          </Typography>
+                        )}
+                      </Box>
+                    )}
                   </Box>
 
                   {/* Avatar for own messages (right side) */}
@@ -891,6 +1119,16 @@ export default function ChatArea(props: ChatAreaProps) {
             0% { opacity: 0.2; transform: translateY(0px); }
             20% { opacity: 1; transform: translateY(-1px); }
             100% { opacity: 0.2; transform: translateY(0px); }
+          }
+          
+          .like-animation {
+            animation: likePulse 0.6s ease;
+          }
+          
+          @keyframes likePulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.3); }
+            100% { transform: scale(1); }
           }
         `}</style>
         {/* Scroll anchor */}
