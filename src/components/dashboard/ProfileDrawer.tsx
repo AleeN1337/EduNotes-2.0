@@ -23,7 +23,6 @@ import {
   Business as OrganizationsIcon,
   BarChart as StatsIcon,
   Lock as PasswordIcon,
-  Settings as SettingsIcon,
   Add as AddIcon,
   Delete as DeleteIcon,
 } from "@mui/icons-material";
@@ -173,21 +172,71 @@ export default function ProfileDrawer({
             >
               <CardContent sx={{ p: 3 }}>
                 <Box sx={{ display: "flex", alignItems: "center", mb: 3 }}>
-                  <Avatar
-                    sx={{
-                      width: 64,
-                      height: 64,
-                      mr: 3,
-                      background:
-                        "linear-gradient(45deg, #FE6B8B 30%, #FF8E53 90%)",
-                      fontSize: "24px",
-                      fontWeight: "bold",
-                    }}
-                    src={localAvatar || undefined}
-                  >
-                    {!localAvatar &&
-                      profileData?.email?.charAt(0).toUpperCase()}
-                  </Avatar>
+                  <Box sx={{ position: "relative", mr: 3 }}>
+                    <Avatar
+                      sx={{
+                        width: 64,
+                        height: 64,
+                        background:
+                          "linear-gradient(45deg, #FE6B8B 30%, #FF8E53 90%)",
+                        fontSize: "24px",
+                        fontWeight: "bold",
+                        position: "relative",
+                        zIndex: 1,
+                        cursor: "pointer",
+                        transition: "opacity 0.2s",
+                        "&:hover": {
+                          opacity: 0.8,
+                        },
+                      }}
+                      src={localAvatar || undefined}
+                    >
+                      {!localAvatar &&
+                        profileData?.email?.charAt(0).toUpperCase()}
+                    </Avatar>
+                    {/* Hover overlay for avatar change */}
+                    <label
+                      htmlFor="profiledrawer-avatar-upload"
+                      style={{
+                        position: "absolute",
+                        left: 0,
+                        top: 0,
+                        width: 64,
+                        height: 64,
+                        cursor: "pointer",
+                        zIndex: 2,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        background: "rgba(52,152,219,0.0)",
+                        borderRadius: "50%",
+                        transition: "background 0.2s, opacity 0.2s",
+                        opacity: 0,
+                        pointerEvents: "none",
+                      }}
+                      className="avatar-plus-hover"
+                    >
+                      <AddIcon
+                        sx={{
+                          color: "#3498db",
+                          fontSize: 24,
+                          background: "white",
+                          borderRadius: "50%",
+                        }}
+                      />
+                    </label>
+                    <style>{`
+                      .avatar-plus-hover {
+                        pointer-events: none;
+                      }
+                      .MuiAvatar-root:hover + label.avatar-plus-hover,
+                      label.avatar-plus-hover:hover {
+                        opacity: 1 !important;
+                        background: rgba(52,152,219,0.12) !important;
+                        pointer-events: auto !important;
+                      }
+                    `}</style>
+                  </Box>
                   <input
                     accept="image/*"
                     style={{ display: "none" }}
@@ -197,20 +246,6 @@ export default function ProfileDrawer({
                       handleAvatarFile(e.target.files?.[0] ?? null)
                     }
                   />
-                  <label htmlFor="profiledrawer-avatar-upload">
-                    <Button
-                      component="span"
-                      size="small"
-                      sx={{ ml: 1 }}
-                      disabled={uploadingAvatar}
-                    >
-                      {uploadingAvatar ? (
-                        <CircularProgress size={18} />
-                      ) : (
-                        "Zmień avatar"
-                      )}
-                    </Button>
-                  </label>
                   <Box>
                     <Typography variant="h6" sx={{ fontWeight: 600 }}>
                       {profileData?.username ||

@@ -1,8 +1,15 @@
 import axios from "axios";
 
+// Decide baseURL at runtime:
+// - In the browser: ALWAYS go through our Next.js proxy to avoid CORS
+// - On the server: talk to the backend directly
+const isBrowser = typeof window !== "undefined";
+const browserBase = "/api/backend"; // same-origin proxy
+const serverBase = process.env.BACKEND_URL || "http://localhost:8000";
+
 // Create axios instance with base configuration
 const api = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || "/api/backend",
+  baseURL: isBrowser ? browserBase : serverBase,
   timeout: 30000, // allow slower backend & AI operations
 });
 

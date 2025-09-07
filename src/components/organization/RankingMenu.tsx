@@ -41,6 +41,8 @@ export default function RankingMenu({ members, orgId }: RankingMenuProps) {
     setAnchorEl(e.currentTarget);
   const handleClose = () => setAnchorEl(null);
 
+  const [userAvatars, setUserAvatars] = useState<Record<string, string>>({});
+
   useEffect(() => {
     if (!open) return;
     let mounted = true;
@@ -76,7 +78,46 @@ export default function RankingMenu({ members, orgId }: RankingMenuProps) {
       }
     };
 
+    // Fetch avatars for all members
+    const fetchAvatars = async () => {
+      const avatarPromises = members.map(async (member) => {
+        try {
+          const res = await api.get(`/users/${member.user_id}`, {
+            validateStatus: () => true,
+          });
+          if (res?.status === 200 && res.data) {
+            const u = res.data?.data ?? res.data;
+            const avatarPath = u?.avatar_url || u?.avatar || null;
+            if (avatarPath) {
+              // Resolve avatar URL similar to ChatArea
+              const resolvedUrl = avatarPath.startsWith("http")
+                ? avatarPath
+                : avatarPath.includes("avatars")
+                ? `http://localhost:8000/media/avatars/${avatarPath
+                    .split("/")
+                    .pop()}`
+                : avatarPath;
+              return { userId: member.user_id, avatar: resolvedUrl };
+            }
+          }
+        } catch (e) {
+          console.warn(`Failed to fetch avatar for user ${member.user_id}`, e);
+        }
+        return null;
+      });
+
+      const avatarResults = await Promise.all(avatarPromises);
+      const avatarMap: Record<string, string> = {};
+      avatarResults.forEach((result) => {
+        if (result) {
+          avatarMap[result.userId] = result.avatar;
+        }
+      });
+      if (mounted) setUserAvatars(avatarMap);
+    };
+
     void fetchLikes();
+    void fetchAvatars();
     return () => {
       mounted = false;
     };
@@ -152,11 +193,13 @@ export default function RankingMenu({ members, orgId }: RankingMenuProps) {
             {ranked.map((m, idx) => {
               const rank = idx + 1;
               const medal = medalFor(rank);
+              const userAvatar = userAvatars[m.user_id];
               return (
                 <ListItem key={m.user_id} sx={{ gap: 1 }}>
                   <ListItemAvatar>
                     {medal ? (
                       <Avatar
+                        src={userAvatar}
                         sx={{
                           width: 36,
                           height: 36,
@@ -164,11 +207,11 @@ export default function RankingMenu({ members, orgId }: RankingMenuProps) {
                           color: "black",
                         }}
                       >
-                        <EmojiEventsIcon />
+                        {userAvatar ? null : <EmojiEventsIcon />}
                       </Avatar>
                     ) : (
-                      <Avatar sx={{ width: 36, height: 36 }}>
-                        {getInitials(m)}
+                      <Avatar src={userAvatar} sx={{ width: 36, height: 36 }}>
+                        {userAvatar ? null : getInitials(m)}
                       </Avatar>
                     )}
                   </ListItemAvatar>

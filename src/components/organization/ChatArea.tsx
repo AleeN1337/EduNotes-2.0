@@ -805,7 +805,13 @@ export default function ChatArea(props: ChatAreaProps) {
                   }}
                 >
                   {/* Wrap bubble + reactions vertically to prevent overlap */}
-                  <Box sx={{ display: "flex", flexDirection: "column", maxWidth: "70%" }}>
+                  <Box
+                    sx={{
+                      display: "flex",
+                      flexDirection: "column",
+                      maxWidth: "70%",
+                    }}
+                  >
                     {/* Message bubble */}
                     <Box
                       sx={{
@@ -832,123 +838,131 @@ export default function ChatArea(props: ChatAreaProps) {
                         },
                       }}
                     >
-                    {/* In-bubble avatar at bottom-left */}
-                    <Avatar
-                      src={
-                        resolveAssetUrl(
-                          (me.user &&
-                            (me.user.avatar_url ||
-                              (me.user as { avatar?: string }).avatar)) ||
-                            me.avatar_url ||
-                            (me as MessageExtended & { avatar?: string })
-                              .avatar ||
-                            undefined
-                        ) ||
-                        avatarMap[
-                          String(me.user?.id ?? me.user_id ?? me.id ?? "")
-                        ] ||
-                        (isMessageFromMe(msg)
-                          ? resolveAssetUrl(myAvatar || undefined) || undefined
-                          : undefined)
-                      }
-                      sx={{
-                        width: 28,
-                        height: 28,
-                        position: "absolute",
-                        left: 8,
-                        bottom: 8,
-                        backgroundColor:
-                          userColors[msg.user_id] ??
-                          getColorForUser(String(msg.user_id)),
-                        fontSize: "0.7rem",
-                        fontWeight: 700,
-                        border: "2px solid rgba(0,0,0,0.06)",
-                      }}
-                    >
-                      {/* show initials only if no avatar image */}
-                      {!(
-                        me.user &&
-                        (me.user.avatar_url ||
-                          (me.user as { avatar?: string }).avatar)
-                      ) &&
-                        !(
-                          me.avatar_url ||
-                          (me as MessageExtended & { avatar?: string }).avatar
+                      {/* In-bubble avatar at bottom-left */}
+                      <Avatar
+                        src={
+                          resolveAssetUrl(
+                            (me.user &&
+                              (me.user.avatar_url ||
+                                (me.user as { avatar?: string }).avatar)) ||
+                              me.avatar_url ||
+                              (me as MessageExtended & { avatar?: string })
+                                .avatar ||
+                              undefined
+                          ) ||
+                          avatarMap[
+                            String(me.user?.id ?? me.user_id ?? me.id ?? "")
+                          ] ||
+                          (isMessageFromMe(msg)
+                            ? resolveAssetUrl(myAvatar || undefined) ||
+                              undefined
+                            : undefined)
+                        }
+                        sx={{
+                          width: 28,
+                          height: 28,
+                          position: "absolute",
+                          left: 8,
+                          bottom: 8,
+                          backgroundColor:
+                            userColors[msg.user_id] ??
+                            getColorForUser(String(msg.user_id)),
+                          fontSize: "0.7rem",
+                          fontWeight: 700,
+                          border: "2px solid rgba(0,0,0,0.06)",
+                        }}
+                      >
+                        {/* show initials only if no avatar image */}
+                        {!(
+                          me.user &&
+                          (me.user.avatar_url ||
+                            (me.user as { avatar?: string }).avatar)
                         ) &&
-                        getUserInitials(
-                          String(me.user?.id ?? me.user_id ?? me.id ?? "")
-                        )}
-                    </Avatar>
-                    {/* Image/file attachment preview */}
-                    {msg.image_url &&
-                      (!failedImages[msg.id] ? (
-                        <Box sx={{ mt: 0.5, mb: 1 }}>
-                          <img
-                            src={resolveAssetUrl(msg.image_url)}
-                            alt="Załącznik"
-                            onError={() => {
-                              // Keep a single error log for failed loads
-                              console.warn("[Image Error] Failed to load", {
-                                image_url: msg.image_url,
-                              });
-                              markImageFailed(msg.id);
-                            }}
-                            onLoad={() => {
-                              // no-op; image loaded successfully
-                            }}
-                            onClick={() =>
-                              openLightbox(resolveAssetUrl(msg.image_url) || "")
-                            }
-                            style={{
-                              maxWidth: "100%",
-                              borderRadius: 8,
-                              display: "block",
-                              cursor: "zoom-in",
-                            }}
-                          />
-                        </Box>
-                      ) : (
-                        <Box sx={{ mt: 0.5, mb: 1 }}>
-                          <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                            <a
-                              href={
-                                resolveAssetUrl(msg.image_url) || msg.image_url
-                              }
-                              target="_blank"
-                              rel="noreferrer"
-                              style={{
-                                color: "inherit",
-                                textDecoration: "underline",
+                          !(
+                            me.avatar_url ||
+                            (me as MessageExtended & { avatar?: string }).avatar
+                          ) &&
+                          getUserInitials(
+                            String(me.user?.id ?? me.user_id ?? me.id ?? "")
+                          )}
+                      </Avatar>
+                      {/* Image/file attachment preview */}
+                      {msg.image_url &&
+                        (!failedImages[msg.id] ? (
+                          <Box sx={{ mt: 0.5, mb: 1 }}>
+                            <img
+                              src={resolveAssetUrl(msg.image_url)}
+                              alt="Załącznik"
+                              onError={() => {
+                                // Keep a single error log for failed loads
+                                console.warn("[Image Error] Failed to load", {
+                                  image_url: msg.image_url,
+                                });
+                                markImageFailed(msg.id);
                               }}
+                              onLoad={() => {
+                                // no-op; image loaded successfully
+                              }}
+                              onClick={() =>
+                                openLightbox(
+                                  resolveAssetUrl(msg.image_url) || ""
+                                )
+                              }
+                              style={{
+                                maxWidth: "100%",
+                                borderRadius: 8,
+                                display: "block",
+                                cursor: "zoom-in",
+                              }}
+                            />
+                          </Box>
+                        ) : (
+                          <Box sx={{ mt: 0.5, mb: 1 }}>
+                            <Typography
+                              variant="body2"
+                              sx={{ fontWeight: 500 }}
                             >
-                              Pobierz załącznik
-                            </a>
-                          </Typography>
-                        </Box>
-                      ))}
-                    {msg.content?.trim() ? (
-                      <Typography variant="body2" sx={{ fontWeight: 500 }}>
-                        {msg.content}
+                              <a
+                                href={
+                                  resolveAssetUrl(msg.image_url) ||
+                                  msg.image_url
+                                }
+                                target="_blank"
+                                rel="noreferrer"
+                                style={{
+                                  color: "inherit",
+                                  textDecoration: "underline",
+                                }}
+                              >
+                                Pobierz załącznik
+                              </a>
+                            </Typography>
+                          </Box>
+                        ))}
+                      {msg.content?.trim() ? (
+                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                          {msg.content}
+                        </Typography>
+                      ) : null}
+                      {/* Hidden timestamp under the bubble, shows on hover */}
+                      <Typography
+                        className="message-timestamp"
+                        variant="caption"
+                        color="text.secondary"
+                        sx={{
+                          position: "absolute",
+                          bottom: -16,
+                          left: isOwn ? "auto" : 8,
+                          right: isOwn ? 8 : "auto",
+                          opacity: 0,
+                          transform: "translateY(4px)",
+                          transition:
+                            "opacity 0.15s ease, transform 0.15s ease",
+                          pointerEvents: "none",
+                        }}
+                      >
+                        {new Date(msg.created_at).toLocaleTimeString()}
                       </Typography>
-                    ) : null}
-                    {/* Hidden timestamp under the bubble, shows on hover */}
-                    <Typography
-                      className="message-timestamp"
-                      variant="caption"
-                      color="text.secondary"
-                      sx={{
-                        position: "absolute",
-                        bottom: -16,
-                        left: isOwn ? "auto" : 8,
-                        right: isOwn ? 8 : "auto",
-                        opacity: 0,
-                        transform: "translateY(4px)",
-                        transition: "opacity 0.15s ease, transform 0.15s ease",
-                        pointerEvents: "none",
-                      }}
-                    >
-                      {new Date(msg.created_at).toLocaleTimeString()}
-                    </Typography>
                     </Box>
 
                     {/* Reactions below the bubble so they don't obscure text */}
@@ -975,17 +989,41 @@ export default function ChatArea(props: ChatAreaProps) {
                           }}
                         >
                           {likeCount > 0 && (
-                            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                              <ThumbUpIcon sx={{ fontSize: 14, color: "#1565c0" }} />
-                              <Typography variant="caption" sx={{ lineHeight: 1 }} data-testid="like-count">
+                            <Box
+                              sx={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 0.5,
+                              }}
+                            >
+                              <ThumbUpIcon
+                                sx={{ fontSize: 14, color: "#1565c0" }}
+                              />
+                              <Typography
+                                variant="caption"
+                                sx={{ lineHeight: 1 }}
+                                data-testid="like-count"
+                              >
                                 {likeCount}
                               </Typography>
                             </Box>
                           )}
                           {dislikeCount > 0 && (
-                            <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
-                              <ThumbDownIcon sx={{ fontSize: 14, color: "#c62828" }} />
-                              <Typography variant="caption" sx={{ lineHeight: 1 }} data-testid="dislike-count">
+                            <Box
+                              sx={{
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 0.5,
+                              }}
+                            >
+                              <ThumbDownIcon
+                                sx={{ fontSize: 14, color: "#c62828" }}
+                              />
+                              <Typography
+                                variant="caption"
+                                sx={{ lineHeight: 1 }}
+                                data-testid="dislike-count"
+                              >
                                 {dislikeCount}
                               </Typography>
                             </Box>

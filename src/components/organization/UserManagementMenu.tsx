@@ -250,6 +250,8 @@ export default function UserManagementMenu({
     return getSortName(a).localeCompare(getSortName(b));
   });
 
+  const [userAvatars, setUserAvatars] = useState<Record<string, string>>({});
+
   // Fetch likes for members when menu opens (best-effort)
   React.useEffect(() => {
     if (!open) return;
@@ -288,7 +290,46 @@ export default function UserManagementMenu({
       }
     };
 
+    // Fetch avatars for all members
+    const fetchAvatars = async () => {
+      const avatarPromises = members.map(async (member) => {
+        try {
+          const res = await api.get(`/users/${member.user_id}`, {
+            validateStatus: () => true,
+          });
+          if (res?.status === 200 && res.data) {
+            const u = res.data?.data ?? res.data;
+            const avatarPath = u?.avatar_url || u?.avatar || null;
+            if (avatarPath) {
+              // Resolve avatar URL similar to ChatArea
+              const resolvedUrl = avatarPath.startsWith("http")
+                ? avatarPath
+                : avatarPath.includes("avatars")
+                ? `http://localhost:8000/media/avatars/${avatarPath
+                    .split("/")
+                    .pop()}`
+                : avatarPath;
+              return { userId: member.user_id, avatar: resolvedUrl };
+            }
+          }
+        } catch (e) {
+          console.warn(`Failed to fetch avatar for user ${member.user_id}`, e);
+        }
+        return null;
+      });
+
+      const avatarResults = await Promise.all(avatarPromises);
+      const avatarMap: Record<string, string> = {};
+      avatarResults.forEach((result) => {
+        if (result) {
+          avatarMap[result.userId] = result.avatar;
+        }
+      });
+      setUserAvatars(avatarMap);
+    };
+
     void fetchLikes();
+    void fetchAvatars();
   }, [open, members, orgId]);
 
   return (
@@ -412,6 +453,7 @@ export default function UserManagementMenu({
             >
               {/* Avatar */}
               <Avatar
+                src={userAvatars[member.user_id]}
                 sx={{
                   width: 40,
                   height: 40,
@@ -420,7 +462,7 @@ export default function UserManagementMenu({
                     member.role === "owner" ? "primary.main" : "secondary.main",
                 }}
               >
-                {getInitials(member)}
+                {userAvatars[member.user_id] ? null : getInitials(member)}
               </Avatar>
 
               {/* User Info */}
