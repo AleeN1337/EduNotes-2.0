@@ -72,6 +72,9 @@ export class AuthAPI {
 
           // Dodaj również do cookies dla middleware
           document.cookie = `auth_token=${result.token}; path=/; max-age=86400; samesite=lax`;
+
+          // Reset session start time on login
+          localStorage.setItem("session_start", Date.now().toString());
         }
         return result;
       } else {
@@ -91,6 +94,9 @@ export class AuthAPI {
 
           // Dodaj również do cookies
           document.cookie = `auth_token=${MOCK_TOKEN}; path=/; max-age=86400; samesite=lax`;
+
+          // Reset session start time on login
+          localStorage.setItem("session_start", Date.now().toString());
 
           return {
             success: true,
@@ -117,6 +123,9 @@ export class AuthAPI {
 
         // Dodaj również do cookies
         document.cookie = `auth_token=${MOCK_TOKEN}; path=/; max-age=86400; samesite=lax`;
+
+        // Reset session start time on login
+        localStorage.setItem("session_start", Date.now().toString());
 
         return {
           success: true,
@@ -178,6 +187,8 @@ export class AuthAPI {
           rawUser.email || rawUser.user_email || rawUser.email_address || null,
       };
       localStorage.setItem("user", JSON.stringify(normalized));
+      // Reset session start time on registration
+      localStorage.setItem("session_start", Date.now().toString());
       return {
         success: true,
         data: { ...backendUser, token: token ?? "" },

@@ -164,7 +164,7 @@ export default function QuickStatsCards() {
               {rank !== null ? rank : "--"}
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Nasza ranga
+              Moja ranga
             </Typography>
           </CardContent>
         </Card>

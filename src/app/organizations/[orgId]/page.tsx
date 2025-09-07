@@ -1571,7 +1571,6 @@ export default function OrganizationPage() {
               isOwner={isOwner}
               orgId={orgId}
               onRemoveMember={handleRemoveMember}
-              onRefreshMembers={loadMembers}
               userEmails={members.reduce((acc, m) => {
                 if (m.user_id) acc[m.user_id] = m.email ?? "";
                 return acc;

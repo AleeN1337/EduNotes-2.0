@@ -621,42 +621,6 @@ export default function ProfileDrawer({
           </Box>
         );
 
-      case 3: // Ustawienia (tab: Ustawienia)
-        return (
-          <Box sx={{ p: 2 }}>
-            <Typography variant="h6" gutterBottom>
-              Ustawienia
-            </Typography>
-            <Card sx={{ mb: 2 }}>
-              <CardContent>
-                <Typography variant="subtitle1" gutterBottom>
-                  Preferencje
-                </Typography>
-                <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
-                  <Box
-                    sx={{ display: "flex", justifyContent: "space-between" }}
-                  >
-                    <Typography variant="body2">Motyw</Typography>
-                    <Chip label="Jasny" size="small" />
-                  </Box>
-                  <Box
-                    sx={{ display: "flex", justifyContent: "space-between" }}
-                  >
-                    <Typography variant="body2">Język</Typography>
-                    <Chip label="Polski" size="small" />
-                  </Box>
-                  <Box
-                    sx={{ display: "flex", justifyContent: "space-between" }}
-                  >
-                    <Typography variant="body2">Powiadomienia email</Typography>
-                    <Chip label="Włączone" color="primary" size="small" />
-                  </Box>
-                </Box>
-              </CardContent>
-            </Card>
-          </Box>
-        );
-
       default:
         return null;
     }
@@ -775,11 +739,6 @@ export default function ProfileDrawer({
             iconPosition="start"
           />
           <Tab icon={<PasswordIcon />} label="Hasło" iconPosition="start" />
-          <Tab
-            icon={<SettingsIcon />}
-            label="Ustawienia"
-            iconPosition="start"
-          />
         </Tabs>
       </Box>
 

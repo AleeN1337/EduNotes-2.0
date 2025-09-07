@@ -186,7 +186,7 @@ export default function OrganizationsSection({
                         textTransform: "none",
                         "&:hover": {
                           background: "primary.main",
-                          color: "white",
+                          color: "blue",
                         },
                       }}
                     >
@@ -271,18 +271,6 @@ export default function OrganizationsSection({
                 }}
               >
                 Utwórz organizację
-              </Button>
-              <Button
-                variant="outlined"
-                startIcon={<span>📧</span>}
-                sx={{
-                  px: 3,
-                  py: 1.5,
-                  borderRadius: 2,
-                  fontWeight: 600,
-                }}
-              >
-                Mam kod zaproszenia
               </Button>
             </Box>
           </Box>

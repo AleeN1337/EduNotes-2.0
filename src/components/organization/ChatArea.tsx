@@ -24,9 +24,6 @@ import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutline";
 import AttachFileIcon from "@mui/icons-material/AttachFile";
 import SendIcon from "@mui/icons-material/Send";
 import DeleteIcon from "@mui/icons-material/Delete";
-import ThumbUpIcon from "@mui/icons-material/ThumbUp";
-import ThumbDownIcon from "@mui/icons-material/ThumbDown";
-import AddIcon from "@mui/icons-material/Add";
 import { Message } from "./types";
 import api from "@/lib/api";
 import { MEDIA_BASE, buildImageProxyUrl } from "@/lib/config";
@@ -252,57 +249,9 @@ export default function ChatArea(props: ChatAreaProps) {
     return palette[idx];
   };
 
-  // Capture initial ratings to avoid double-counting when showing like totals
-  const initialRatingsRef = React.useRef<
-    Record<string, { liked: boolean; disliked: boolean }>
-  >({});
-  const initialCapturedRef = React.useRef(false);
-  React.useEffect(() => {
-    if (initialCapturedRef.current) return;
-    try {
-      const stored = JSON.parse(localStorage.getItem(ratingsKey) || "{}");
-      initialRatingsRef.current = stored;
-    } catch {
-      initialRatingsRef.current = {};
-    }
-    initialCapturedRef.current = true;
-  }, [ratingsKey]);
+  // Capture initial ratings - REMOVED for Messenger-like appearance
 
-  // Seed baseline with any known current props (messageRatings) for ids not yet captured.
-  React.useEffect(() => {
-    if (!messageRatings) return;
-    const base = initialRatingsRef.current;
-    let changed = false;
-    for (const [id, state] of Object.entries(messageRatings)) {
-      if (!base[id]) {
-        base[id] = { liked: !!state?.liked, disliked: !!state?.disliked };
-        changed = true;
-      }
-    }
-    if (changed) {
-      initialRatingsRef.current = { ...base };
-    }
-  }, [messageRatings]);
-
-  const getDisplayedLikes = (msg: Message) => {
-    const base = typeof msg.likes === "number" ? msg.likes : 0;
-    const currentLiked = !!messageRatings[msg.id]?.liked;
-    const baseline = initialRatingsRef.current[msg.id] || {};
-    const baselineLiked = !!(baseline as any).liked;
-    const delta = (currentLiked ? 1 : 0) - (baselineLiked ? 1 : 0);
-    const res = base + delta;
-    return res < 0 ? 0 : res;
-  };
-
-  const getDisplayedDislikes = (msg: Message) => {
-    const base = typeof msg.dislikes === "number" ? msg.dislikes : 0;
-    const currentDisliked = !!messageRatings[msg.id]?.disliked;
-    const baseline = initialRatingsRef.current[msg.id] || {};
-    const baselineDisliked = !!(baseline as any).disliked;
-    const delta = (currentDisliked ? 1 : 0) - (baselineDisliked ? 1 : 0);
-    const res = base + delta;
-    return res < 0 ? 0 : res;
-  };
+  // Functions for displaying likes/dislikes - REMOVED for Messenger-like appearance
   const isImageLink = (url?: string) =>
     !!url && /\.(png|jpe?g|gif|webp|bmp|svg)(\?.*)?$/i.test(url);
 
@@ -386,22 +335,10 @@ export default function ChatArea(props: ChatAreaProps) {
     }
   };
 
-  // Plus menu state
-  const [menuAnchor, setMenuAnchor] = React.useState<null | HTMLElement>(null);
-  const [menuMsg, setMenuMsg] = React.useState<Message | null>(null);
-  // Track pending like/dislike requests per message to avoid double submits
-  const [pendingRatings, setPendingRatings] = React.useState<
-    Record<string, boolean>
-  >({});
-  // ref mirror for immediate synchronous checks inside handlers
-  const pendingRef = React.useRef<Record<string, boolean>>({});
-  // Confirmed ratings reflect server-acknowledged likes/dislikes
-  const [confirmedRatings, setConfirmedRatings] = React.useState<
-    Record<string, { liked?: boolean; disliked?: boolean }>
-  >({});
+  // Plus menu state - REMOVED for Messenger-like appearance
+  // Track pending like/dislike requests per message - REMOVED for Messenger-like appearance
   const closeMenu = () => {
-    setMenuAnchor(null);
-    setMenuMsg(null);
+    // Menu removed for Messenger-like appearance
   };
 
   // Track image render failures to fallback to a link
@@ -564,78 +501,7 @@ export default function ChatArea(props: ChatAreaProps) {
     }
   };
 
-  // Unified reaction sender to emulate Facebook-like behavior (like, dislike, none)
-  // desired: 'like' | 'dislike' | 'none'
-  const sendReaction = async (
-    noteId: string,
-    desired: "like" | "dislike" | "none",
-    prevKind?: "like" | "dislike" | null
-  ) => {
-    // Helper: detect backend "already reacted" error that we can treat as success
-    const isAlreadyErr = (err: any) => {
-      const status = err?.response?.status;
-      const detail = (err?.response?.data?.detail || "")
-        .toString()
-        .toLowerCase();
-      return (
-        status === 400 &&
-        (detail.includes("already like") ||
-          detail.includes("already dislike") ||
-          detail.includes("already"))
-      );
-    };
-
-    const ignore400 = process.env.NEXT_PUBLIC_IGNORE_REACTION_400 === "1";
-    if (desired === "like") {
-      const res = await api.post(`/notes/give_like`, null, {
-        params: { note_id: noteId },
-        validateStatus: () => true, // prevent global error logging
-      });
-      const detail = (res?.data?.detail || "").toString().toLowerCase();
-      if (res.status >= 200 && res.status < 300) return res;
-      if (
-        res.status === 400 &&
-        (detail.includes("already like") ||
-          detail.includes("already dislike") ||
-          detail.includes("already"))
-      ) {
-        return { data: { ok: true } } as any;
-      }
-      // Optionally ignore any 400 in dev if feature flag is set
-      if (res.status === 400 && ignore400) {
-        return { data: { ok: true } } as any;
-      }
-      throw Object.assign(new Error("Like request failed"), {
-        response: { status: res.status, data: res.data },
-      });
-    }
-    if (desired === "dislike") {
-      const res = await api.post(`/notes/give_dislike`, null, {
-        params: { note_id: noteId },
-        validateStatus: () => true, // prevent global error logging
-      });
-      const detail = (res?.data?.detail || "").toString().toLowerCase();
-      if (res.status >= 200 && res.status < 300) return res;
-      if (
-        res.status === 400 &&
-        (detail.includes("already like") ||
-          detail.includes("already dislike") ||
-          detail.includes("already"))
-      ) {
-        return { data: { ok: true } } as any;
-      }
-      // Optionally ignore any 400 in dev if feature flag is set
-      if (res.status === 400 && ignore400) {
-        return { data: { ok: true } } as any;
-      }
-      throw Object.assign(new Error("Dislike request failed"), {
-        response: { status: res.status, data: res.data },
-      });
-    }
-    // Neutralize (toggle off): backend has no endpoint — do this client-only.
-    // We don't call the server to avoid 405/400 noise and keep FB-like UX.
-    return { data: { ok: true } } as any;
-  };
+  // Unified reaction sender - REMOVED for Messenger-like appearance
 
   // Preview for locally selected file (before it's uploaded)
   const [selectedFilePreview, setSelectedFilePreview] = React.useState<
@@ -795,97 +661,79 @@ export default function ChatArea(props: ChatAreaProps) {
                     width: "100%",
                     display: "flex",
                     justifyContent: isOwn ? "flex-end" : "flex-start",
-                    alignItems: "flex-start",
+                    alignItems: "flex-end",
                     mb: 2,
                     gap: 1,
-                    "&:hover .message-plus": {
-                      opacity: 1,
-                      visibility: "visible",
-                    },
                   }}
                 >
-                  {/* Wrap bubble + reactions vertically to prevent overlap */}
+                  {/* Avatar for other users (left side) */}
+                  {!isOwn && (
+                    <Avatar
+                      src={
+                        resolveAssetUrl(
+                          (me.user &&
+                            (me.user.avatar_url ||
+                              (me.user as { avatar?: string }).avatar)) ||
+                            me.avatar_url ||
+                            (me as MessageExtended & { avatar?: string })
+                              .avatar ||
+                            undefined
+                        ) ||
+                        avatarMap[
+                          String(me.user?.id ?? me.user_id ?? me.id ?? "")
+                        ]
+                      }
+                      sx={{
+                        width: 32,
+                        height: 32,
+                        backgroundColor:
+                          userColors[msg.user_id] ??
+                          getColorForUser(String(msg.user_id)),
+                        fontSize: "0.8rem",
+                        fontWeight: 600,
+                        border: "2px solid #e0e0e0",
+                      }}
+                    >
+                      {!(
+                        me.user &&
+                        (me.user.avatar_url ||
+                          (me.user as { avatar?: string }).avatar)
+                      ) &&
+                        !(
+                          me.avatar_url ||
+                          (me as MessageExtended & { avatar?: string }).avatar
+                        ) &&
+                        getUserInitials(
+                          String(me.user?.id ?? me.user_id ?? me.id ?? "")
+                        )}
+                    </Avatar>
+                  )}
+
+                  {/* Message bubble */}
                   <Box
                     sx={{
                       display: "flex",
                       flexDirection: "column",
                       maxWidth: "70%",
+                      alignItems: isOwn ? "flex-end" : "flex-start",
                     }}
                   >
-                    {/* Message bubble */}
+                    {/* Message content */}
                     <Box
                       sx={{
                         p: 2,
-                        pl: 6, // make room for avatar inside bubble (left)
-                        pb: 5, // make room for avatar inside bubble (bottom)
                         position: "relative",
-                        width: "auto",
-                        // determine canonical author id for consistent coloring/initials
-                        backgroundColor: getColorForUser(
-                          String(me.user?.id ?? me.user_id ?? me.id ?? "")
-                        ),
-                        color: "#2c3e50",
+                        backgroundColor: isOwn ? "#0084ff" : "#e4e6ea",
+                        color: isOwn ? "white" : "#1c1e21",
                         borderRadius: isOwn
                           ? "18px 18px 4px 18px"
                           : "18px 18px 18px 4px",
                         whiteSpace: "pre-wrap",
                         wordBreak: "break-word",
-                        boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
-                        // reveal timestamp only when hovering the bubble
-                        "&:hover .message-timestamp": {
-                          opacity: 1,
-                          transform: "translateY(0px)",
-                        },
+                        boxShadow: "0 1px 2px rgba(0,0,0,0.1)",
+                        wordWrap: "break-word",
                       }}
                     >
-                      {/* In-bubble avatar at bottom-left */}
-                      <Avatar
-                        src={
-                          resolveAssetUrl(
-                            (me.user &&
-                              (me.user.avatar_url ||
-                                (me.user as { avatar?: string }).avatar)) ||
-                              me.avatar_url ||
-                              (me as MessageExtended & { avatar?: string })
-                                .avatar ||
-                              undefined
-                          ) ||
-                          avatarMap[
-                            String(me.user?.id ?? me.user_id ?? me.id ?? "")
-                          ] ||
-                          (isMessageFromMe(msg)
-                            ? resolveAssetUrl(myAvatar || undefined) ||
-                              undefined
-                            : undefined)
-                        }
-                        sx={{
-                          width: 28,
-                          height: 28,
-                          position: "absolute",
-                          left: 8,
-                          bottom: 8,
-                          backgroundColor:
-                            userColors[msg.user_id] ??
-                            getColorForUser(String(msg.user_id)),
-                          fontSize: "0.7rem",
-                          fontWeight: 700,
-                          border: "2px solid rgba(0,0,0,0.06)",
-                        }}
-                      >
-                        {/* show initials only if no avatar image */}
-                        {!(
-                          me.user &&
-                          (me.user.avatar_url ||
-                            (me.user as { avatar?: string }).avatar)
-                        ) &&
-                          !(
-                            me.avatar_url ||
-                            (me as MessageExtended & { avatar?: string }).avatar
-                          ) &&
-                          getUserInitials(
-                            String(me.user?.id ?? me.user_id ?? me.id ?? "")
-                          )}
-                      </Avatar>
                       {/* Image/file attachment preview */}
                       {msg.image_url &&
                         (!failedImages[msg.id] ? (
@@ -894,7 +742,6 @@ export default function ChatArea(props: ChatAreaProps) {
                               src={resolveAssetUrl(msg.image_url)}
                               alt="Załącznik"
                               onError={() => {
-                                // Keep a single error log for failed loads
                                 console.warn("[Image Error] Failed to load", {
                                   image_url: msg.image_url,
                                 });
@@ -940,120 +787,50 @@ export default function ChatArea(props: ChatAreaProps) {
                           </Box>
                         ))}
                       {msg.content?.trim() ? (
-                        <Typography variant="body2" sx={{ fontWeight: 500 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 400 }}>
                           {msg.content}
                         </Typography>
                       ) : null}
-                      {/* Hidden timestamp under the bubble, shows on hover */}
-                      <Typography
-                        className="message-timestamp"
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{
-                          position: "absolute",
-                          bottom: -16,
-                          left: isOwn ? "auto" : 8,
-                          right: isOwn ? 8 : "auto",
-                          opacity: 0,
-                          transform: "translateY(4px)",
-                          transition:
-                            "opacity 0.15s ease, transform 0.15s ease",
-                          pointerEvents: "none",
-                        }}
-                      >
-                        {new Date(msg.created_at).toLocaleTimeString()}
-                      </Typography>
                     </Box>
 
-                    {/* Reactions below the bubble so they don't obscure text */}
-                    {(() => {
-                      const likeCount = getDisplayedLikes(msg);
-                      const dislikeCount = getDisplayedDislikes(msg);
-                      if (!(likeCount > 0 || dislikeCount > 0)) return null;
-                      return (
-                        <Box
-                          data-testid="message-reactions"
-                          sx={{
-                            mt: 0.5,
-                            alignSelf: isOwn ? "flex-end" : "flex-start",
-                            display: "inline-flex",
-                            alignItems: "center",
-                            gap: 0.75,
-                            backgroundColor: "#eceff1",
-                            borderRadius: 999,
-                            px: 1,
-                            py: 0.25,
-                            color: "#546e7a",
-                            fontSize: 12,
-                            boxShadow: "0 1px 2px rgba(0,0,0,0.08)",
-                          }}
-                        >
-                          {likeCount > 0 && (
-                            <Box
-                              sx={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 0.5,
-                              }}
-                            >
-                              <ThumbUpIcon
-                                sx={{ fontSize: 14, color: "#1565c0" }}
-                              />
-                              <Typography
-                                variant="caption"
-                                sx={{ lineHeight: 1 }}
-                                data-testid="like-count"
-                              >
-                                {likeCount}
-                              </Typography>
-                            </Box>
-                          )}
-                          {dislikeCount > 0 && (
-                            <Box
-                              sx={{
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 0.5,
-                              }}
-                            >
-                              <ThumbDownIcon
-                                sx={{ fontSize: 14, color: "#c62828" }}
-                              />
-                              <Typography
-                                variant="caption"
-                                sx={{ lineHeight: 1 }}
-                                data-testid="dislike-count"
-                              >
-                                {dislikeCount}
-                              </Typography>
-                            </Box>
-                          )}
-                        </Box>
-                      );
-                    })()}
+                    {/* Timestamp */}
+                    <Typography
+                      variant="caption"
+                      color="text.secondary"
+                      sx={{
+                        mt: 0.5,
+                        fontSize: "0.7rem",
+                        px: 1,
+                      }}
+                    >
+                      {new Date(msg.created_at).toLocaleTimeString([], {
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </Typography>
                   </Box>
-                  {/* Plus menu trigger */}
-                  <IconButton
-                    size="small"
-                    className="message-plus"
-                    aria-label="Akcje wiadomości"
-                    data-testid="message-plus"
-                    onClick={(e) => {
-                      setMenuAnchor(e.currentTarget);
-                      setMenuMsg(msg);
-                    }}
-                    sx={{
-                      opacity: 0,
-                      visibility: "hidden",
-                      transition: "opacity 0.15s ease",
-                      color: "#90a4ae",
-                      "&:hover": { backgroundColor: "#eceff1" },
-                    }}
-                  >
-                    <AddIcon fontSize="small" />
-                  </IconButton>
-                  {/* Right-side avatar for own messages */}
-                  {/* No external avatar for own messages; avatar is inside bubble. */}
+
+                  {/* Avatar for own messages (right side) */}
+                  {isOwn && (
+                    <Avatar
+                      src={
+                        resolveAssetUrl(myAvatar || undefined) ||
+                        avatarMap[String(myId || "")]
+                      }
+                      sx={{
+                        width: 32,
+                        height: 32,
+                        backgroundColor:
+                          userColors[myId || ""] ??
+                          getColorForUser(String(myId || "")),
+                        fontSize: "0.8rem",
+                        fontWeight: 600,
+                        border: "2px solid #e0e0e0",
+                      }}
+                    >
+                      {getUserInitials(String(myId || ""))}
+                    </Avatar>
+                  )}
                 </Box>
               </React.Fragment>
             );
@@ -1167,206 +944,7 @@ export default function ChatArea(props: ChatAreaProps) {
           <Button onClick={() => setSummaryOpen(false)}>Zamknij</Button>
         </DialogActions>
       </Dialog>
-      {/* Single contextual menu for like/dislike/delete */}
-      <Menu
-        anchorEl={menuAnchor}
-        open={Boolean(menuAnchor && menuMsg)}
-        onClose={closeMenu}
-        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
-        transformOrigin={{ vertical: "top", horizontal: "center" }}
-      >
-        <MenuItem
-          onClick={async () => {
-            if (!menuMsg) return;
-            const id = String(menuMsg.id);
-            if (pendingRef.current[id]) return;
-
-            const likedLocal = !!messageRatings[id]?.liked;
-            const dislikedLocal = !!messageRatings[id]?.disliked;
-
-            // Decide only from local state to avoid unknown server baseline
-            const desired: "like" | "none" = likedLocal ? "none" : "like";
-            const prevKind: "like" | "dislike" | null = likedLocal
-              ? "like"
-              : dislikedLocal
-              ? "dislike"
-              : null;
-
-            // Close menu first to prevent aria-hidden focus warnings
-            closeMenu();
-
-            // mark pending
-            pendingRef.current[id] = true;
-            setPendingRatings((p) => ({ ...p, [id]: true }));
-
-            const prevState = messageRatings[id] || {
-              liked: false,
-              disliked: false,
-            };
-
-            // optimistic update
-            setMessageRatings((prev) => {
-              const next = {
-                ...prev,
-                [id]:
-                  desired === "like"
-                    ? { liked: true, disliked: false }
-                    : { liked: false, disliked: false },
-              };
-              try {
-                localStorage.setItem(ratingsKey, JSON.stringify(next));
-              } catch {}
-              return next;
-            });
-            try {
-              await sendReaction(id, desired, prevKind);
-              setConfirmedRatings((c) => ({
-                ...c,
-                [id]:
-                  desired === "like"
-                    ? { liked: true, disliked: false }
-                    : { liked: false, disliked: false },
-              }));
-              // Immediately fetch fresh counts from server if parent provided a refresh
-              if (typeof props.onRefresh === "function") {
-                try {
-                  await props.onRefresh();
-                } catch {}
-              }
-            } catch (err: any) {
-              console.warn("Like action failed; rolling back", err);
-              setMessageRatings((prev) => {
-                const next = { ...prev, [id]: prevState };
-                try {
-                  localStorage.setItem(ratingsKey, JSON.stringify(next));
-                } catch {}
-                return next;
-              });
-            } finally {
-              pendingRef.current[id] = false;
-              setPendingRatings((p) => {
-                const copy = { ...p };
-                delete copy[id];
-                return copy;
-              });
-            }
-          }}
-        >
-          <ThumbUpIcon
-            fontSize="small"
-            style={{
-              marginRight: 8,
-              color:
-                menuMsg && messageRatings[menuMsg.id]?.liked
-                  ? "#1565c0"
-                  : undefined,
-            }}
-          />
-          Polub
-        </MenuItem>
-        <MenuItem
-          onClick={async () => {
-            if (!menuMsg) return;
-            const id = String(menuMsg.id);
-            if (pendingRef.current[id]) return;
-
-            const likedLocal = !!messageRatings[id]?.liked;
-            const dislikedLocal = !!messageRatings[id]?.disliked;
-
-            const desired: "dislike" | "none" = dislikedLocal
-              ? "none"
-              : "dislike";
-            const prevKind: "like" | "dislike" | null = dislikedLocal
-              ? "dislike"
-              : likedLocal
-              ? "like"
-              : null;
-
-            // Close menu first to prevent aria-hidden focus warnings
-            closeMenu();
-
-            pendingRef.current[id] = true;
-            setPendingRatings((p) => ({ ...p, [id]: true }));
-
-            const prevState = messageRatings[id] || {
-              liked: false,
-              disliked: false,
-            };
-
-            setMessageRatings((prev) => {
-              const next = {
-                ...prev,
-                [id]:
-                  desired === "dislike"
-                    ? { liked: false, disliked: true }
-                    : { liked: false, disliked: false },
-              };
-              try {
-                localStorage.setItem(ratingsKey, JSON.stringify(next));
-              } catch {}
-              return next;
-            });
-            try {
-              await sendReaction(id, desired, prevKind);
-              setConfirmedRatings((c) => ({
-                ...c,
-                [id]:
-                  desired === "dislike"
-                    ? { liked: false, disliked: true }
-                    : { liked: false, disliked: false },
-              }));
-              if (typeof props.onRefresh === "function") {
-                try {
-                  await props.onRefresh();
-                } catch {}
-              }
-            } catch (err: any) {
-              console.warn("Dislike action failed; rolling back", err);
-              setMessageRatings((prev) => {
-                const next = { ...prev, [id]: prevState };
-                try {
-                  localStorage.setItem(ratingsKey, JSON.stringify(next));
-                } catch {}
-                return next;
-              });
-            } finally {
-              pendingRef.current[id] = false;
-              setPendingRatings((p) => {
-                const copy = { ...p };
-                delete copy[id];
-                return copy;
-              });
-            }
-          }}
-        >
-          <ThumbDownIcon
-            fontSize="small"
-            style={{
-              marginRight: 8,
-              color:
-                menuMsg && messageRatings[menuMsg.id]?.disliked
-                  ? "#c62828"
-                  : undefined,
-            }}
-          />
-          Nie lubię
-        </MenuItem>
-        {menuMsg && isMessageFromMe(menuMsg) && (
-          <MenuItem
-            onClick={() => {
-              if (!menuMsg) return;
-              onDeleteMessage(String(menuMsg.id));
-              closeMenu();
-            }}
-          >
-            <DeleteIcon
-              fontSize="small"
-              style={{ marginRight: 8, color: "#e53935" }}
-            />
-            Usuń
-          </MenuItem>
-        )}
-      </Menu>
+      {/* Menu removed for Messenger-like appearance */}
       <Divider />
       <CardActions
         sx={{ p: 2, flexDirection: "column", gap: 1, backgroundColor: "white" }}

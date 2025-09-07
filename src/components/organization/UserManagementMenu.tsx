@@ -17,8 +17,6 @@ import {
 import {
   Group as GroupIcon,
   Delete as DeleteIcon,
-  Refresh as RefreshIcon,
-  ThumbUp as ThumbUpIcon,
 } from "@mui/icons-material";
 
 export interface OrganizationMember {
@@ -33,7 +31,6 @@ interface UserManagementMenuProps {
   currentUserId?: string | null;
   isOwner: boolean;
   onRemoveMember: (userId: string, email?: string | null) => void;
-  onRefreshMembers: () => void;
   loading?: boolean;
   userEmails?: Record<string, string>;
   onEmailResolved?: (userId: string, email: string) => void;
@@ -45,7 +42,6 @@ export default function UserManagementMenu({
   currentUserId,
   isOwner,
   onRemoveMember,
-  onRefreshMembers,
   loading = false,
   userEmails = {},
   onEmailResolved,
@@ -53,8 +49,6 @@ export default function UserManagementMenu({
 }: UserManagementMenuProps) {
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
   const open = Boolean(anchorEl);
-  const [likesLoading, setLikesLoading] = useState(false);
-  const [userLikes, setUserLikes] = useState<Record<string, number>>({});
 
   const handleOpen = (event: React.MouseEvent<HTMLElement>) => {
     setAnchorEl(event.currentTarget);
@@ -242,55 +236,13 @@ export default function UserManagementMenu({
     // Właściciele na górze
     if (a.role === "owner" && b.role !== "owner") return -1;
     if (b.role === "owner" && a.role !== "owner") return 1;
-    // Potem po liczbie like'ów (malejąco)
-    const aLikes = userLikes[a.user_id] ?? 0;
-    const bLikes = userLikes[b.user_id] ?? 0;
-    if (bLikes !== aLikes) return bLikes - aLikes;
     // W ostateczności alfabetycznie
     return getSortName(a).localeCompare(getSortName(b));
   });
 
   const [userAvatars, setUserAvatars] = useState<Record<string, string>>({});
 
-  // Fetch likes for members when menu opens (best-effort)
-  React.useEffect(() => {
-    if (!open) return;
-    // If no orgId, try to compute from members' notes using global /notes/ (best-effort)
-    const fetchLikes = async () => {
-      setLikesLoading(true);
-      try {
-        const res = await api.get(`/notes/`, { validateStatus: () => true });
-        if (!res) return;
-        const listData = Array.isArray(res.data?.data)
-          ? res.data.data
-          : Array.isArray(res.data)
-          ? res.data
-          : [];
-
-        const counts: Record<string, number> = {};
-        for (const note of listData) {
-          try {
-            const nidOrg =
-              note.organization_id ?? note.org_id ?? note.organization;
-            // If orgId provided, filter notes to this organization, otherwise count all
-            if (orgId && String(nidOrg) !== String(orgId)) continue;
-            const uid = String(note.user_id ?? note.userId ?? note.user ?? "");
-            const likes = Number(note.likes ?? 0) || 0;
-            if (!uid) continue;
-            counts[uid] = (counts[uid] || 0) + likes;
-          } catch (e) {
-            continue;
-          }
-        }
-        setUserLikes(counts);
-      } catch (e) {
-        console.warn("Failed to fetch notes for likes ranking", e);
-      } finally {
-        setLikesLoading(false);
-      }
-    };
-
-    // Fetch avatars for all members
+  // Fetch avatars for all members
     const fetchAvatars = async () => {
       const avatarPromises = members.map(async (member) => {
         try {
@@ -328,9 +280,7 @@ export default function UserManagementMenu({
       setUserAvatars(avatarMap);
     };
 
-    void fetchLikes();
     void fetchAvatars();
-  }, [open, members, orgId]);
 
   return (
     <>
@@ -374,30 +324,9 @@ export default function UserManagementMenu({
       >
         {/* Header */}
         <Box sx={{ px: 2, py: 1.5 }}>
-          <Box
-            sx={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-            }}
-          >
-            <Typography variant="h6" fontWeight={600}>
-              Członkowie organizacji
-            </Typography>
-            <IconButton
-              size="small"
-              onClick={() => {
-                onRefreshMembers();
-              }}
-              disabled={loading}
-            >
-              {loading ? (
-                <CircularProgress size={16} />
-              ) : (
-                <RefreshIcon fontSize="small" />
-              )}
-            </IconButton>
-          </Box>
+          <Typography variant="h6" fontWeight={600}>
+            Członkowie organizacji
+          </Typography>
           <Typography variant="body2" color="text.secondary">
             {members.length} {members.length === 1 ? "członek" : "członków"}
           </Typography>
@@ -445,9 +374,6 @@ export default function UserManagementMenu({
                 display: "flex",
                 alignItems: "center",
                 gap: 2,
-                "&:hover": {
-                  backgroundColor: "action.hover",
-                },
               }}
               disabled={!canRemove}
             >
@@ -483,13 +409,11 @@ export default function UserManagementMenu({
                   >
                     {getDisplayName(member)}
                   </Typography>
-                  {member.role && (
+                  {member.role === "owner" && (
                     <Chip
-                      label={
-                        member.role === "owner" ? "Właściciel" : member.role
-                      }
+                      label="Właściciel"
                       size="small"
-                      color={member.role === "owner" ? "primary" : "default"}
+                      color="primary"
                       variant="outlined"
                       sx={{ fontSize: "0.6rem", height: 20 }}
                     />
@@ -503,20 +427,6 @@ export default function UserManagementMenu({
                       sx={{ fontSize: "0.6rem", height: 20 }}
                     />
                   )}
-                  {/* Likes badge */}
-                  <Box sx={{ display: "flex", alignItems: "center", ml: 1 }}>
-                    {likesLoading ? (
-                      <CircularProgress size={14} thickness={4} />
-                    ) : (
-                      <Chip
-                        icon={<ThumbUpIcon fontSize="small" />}
-                        label={userLikes[member.user_id] ?? 0}
-                        size="small"
-                        variant="outlined"
-                        sx={{ fontSize: "0.6rem", height: 20, ml: 0.5 }}
-                      />
-                    )}
-                  </Box>
                 </Box>
                 {member.username && member.username !== member.email && (
                   <Typography variant="caption" color="text.secondary" noWrap>
